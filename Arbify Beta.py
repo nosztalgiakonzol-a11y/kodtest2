@@ -4690,9 +4690,12 @@ if __name__ == "__main__":
             try:
                 if handle not in driver.window_handles:
                     next_tabs.pop(url, None)
+                    log(f"⚠️ NEXT tab bezárva, eltávolítva: {handle[:8] if handle else 'None'}")
                     continue
                 driver.switch_to.window(handle)
-            except Exception:
+            except Exception as e:
+                next_tabs.pop(url, None)
+                log(f"⚠️ NEXT tab hiba, eltávolítva: {handle[:8] if handle else 'None'} - {str(e)[:50]}")
                 to_close.append(url)
                 continue
 
@@ -4730,9 +4733,12 @@ if __name__ == "__main__":
             try:
                 if handle not in driver.window_handles:
                     group_tabs.pop(url, None)
+                    log(f"⚠️ GROUP tab bezárva, eltávolítva: {handle[:8] if handle else 'None'}")
                     continue
                 driver.switch_to.window(handle)
-            except Exception:
+            except Exception as e:
+                group_tabs.pop(url, None)
+                log(f"⚠️ GROUP tab hiba, eltávolítva: {handle[:8] if handle else 'None'} - {str(e)[:50]}")
                 to_close.append(url)
                 continue
 
