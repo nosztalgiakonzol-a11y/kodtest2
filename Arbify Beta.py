@@ -1727,6 +1727,30 @@ def enqueue_open_task(task: dict):
     except Exception as e:
         warn(f"⚠️ enqueue_open_task hiba: {e}")
 
+def remove_gone_ids_from_open_tasks(gone_ids: set):
+    """
+    Eltűnt tbody ID-ket eltávolítja az OPEN_TASKS sorból.
+    Ezzel elkerüljük, hogy feleslegesen nyissunk meg linkeket már nem létező elemekhez.
+    
+    Args:
+        gone_ids: Eltűnt tbody ID-k halmaza
+    """
+    if not gone_ids or not OPEN_TASKS:
+        return
+    
+    try:
+        # Végigmegyünk az OPEN_TASKS soron és csak azokat tartjuk meg, amik nincsenek a gone_ids-ben
+        original_len = len(OPEN_TASKS)
+        filtered_tasks = deque([task for task in OPEN_TASKS if task.get("id") not in gone_ids])
+        
+        removed_count = original_len - len(filtered_tasks)
+        if removed_count > 0:
+            OPEN_TASKS.clear()
+            OPEN_TASKS.extend(filtered_tasks)
+            log(f"🧹 OPEN_TASKS tisztítás: {removed_count} eltűnt elem eltávolítva (maradt: {len(OPEN_TASKS)})")
+    except Exception as e:
+        warn(f"⚠️ remove_gone_ids_from_open_tasks hiba: {e}")
+
 # ---------- stale-biztos DOM snapshot ----------
 def dom_snapshot_by_id(tbody_id: str, attempts=4, sleep=0.08):
     js = r"""
@@ -3874,6 +3898,10 @@ def group_scan_tab(url: str, info: dict, higher_ids: set):
         gone_here = info.get("active_ids", set()) - curr_ids_tab
         for gid in gone_here:
             pending_deletes.append((url, gid))
+        
+        # Eltűnt ID-k eltávolítása az OPEN_TASKS sorból
+        if gone_here:
+            remove_gone_ids_from_open_tasks(gone_here)
 
         info["active_ids"] = curr_ids_tab
         info["needs_scan"] = False
@@ -3929,6 +3957,10 @@ def next_scan_tab(url: str, info: dict, curr_ids_main: set):
         gone_here = info.get("active_ids", set()) - curr_ids_tab
         for gid in gone_here:
             pending_deletes.append((url, gid))
+        
+        # Eltűnt ID-k eltávolítása az OPEN_TASKS sorból
+        if gone_here:
+            remove_gone_ids_from_open_tasks(gone_here)
 
         info["active_ids"] = curr_ids_tab
         info["needs_scan"] = False
@@ -4879,10 +4911,16 @@ if __name__ == "__main__":
             # MAIN-en eltűnt ID-k
             maybe_gone_main = [aid for aid in list(active_ids) if id_source.get(aid) == 'main' and aid not in curr_ids_main]
             now_ts2 = time.time()
+            gone_main_ids = set()
             for gid in maybe_gone_main:
                 last_ts = last_seen_ts.get(gid, 0.0)
                 if (now_ts2 - last_ts) >= DISAPPEAR_GRACE_SEC:
                     schedule_delete(gid)
+                    gone_main_ids.add(gid)
+            
+            # Eltűnt ID-k eltávolítása az OPEN_TASKS sorból
+            if gone_main_ids:
+                remove_gone_ids_from_open_tasks(gone_main_ids)
 
             # TABOK BEZÁRÁSA
             for url in next_to_close:
