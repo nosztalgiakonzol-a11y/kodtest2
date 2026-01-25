@@ -89,10 +89,10 @@ else:
 
 A `_schedule_nav_backoff()` függvény (sor 1984-1996):
 - **Exponenciális várakozás**: Minden próbálkozásnál kétszer hosszabb várakozási idő
-- **Első próbálkozás**: `NAV_RETRY_BASE` másodperc (alapértelmezés szerint ~10s)
-- **Második próbálkozás**: ~20 másodperc
-- **Harmadik próbálkozás**: ~40 másodperc
-- **Maximum várakozás**: `NAV_RETRY_MAX` másodperc
+- **Első próbálkozás**: `NAV_RETRY_BASE` = 20 másodperc
+- **Második próbálkozás**: 40 másodperc
+- **Harmadik próbálkozás**: 80 másodperc
+- **Maximum várakozás**: `NAV_RETRY_MAX` = 300 másodperc (5 perc)
 
 ```python
 def _schedule_nav_backoff(tid: str):
@@ -304,11 +304,13 @@ if in_bootstrap_phase():  # Első 50 másodperc
 ### NAV Backoff Idővonal
 
 ```
-Timeout #1  →  Várj ~10s   →  Újrapróbálkozás
+Timeout #1  →  Várj 20s   →  Újrapróbálkozás
                                      ↓
-                                  Timeout #2  →  Várj ~20s   →  Újrapróbálkozás
+                                  Timeout #2  →  Várj 40s   →  Újrapróbálkozás
                                                                       ↓
-                                                                   Timeout #3  →  Várj ~40s  →  ...
+                                                                   Timeout #3  →  Várj 80s  →  ...
+                                                                                                    ↓
+                                                                                         Max 300s (5 perc)
 ```
 
 ## Kulcs Függvények Referencia
@@ -316,11 +318,11 @@ Timeout #1  →  Várj ~10s   →  Újrapróbálkozás
 | Függvény | Fájl & Sor | Leírás |
 |----------|-----------|---------|
 | `enqueue_open_task()` | 1717 | Task hozzáadása OPEN_TASKS-hoz |
-| `background_nav_worker()` | 2509 | OPEN_TASKS folyamatos feldolgozása |
+| `background_nav_worker()` | 2530 | OPEN_TASKS folyamatos feldolgozása |
 | `resolve_pairs_round_robin()` | 2047 | Link párok feloldása NAV-on keresztül |
 | `_schedule_nav_backoff()` | 1984 | NAV backoff beállítása exponenciális késleltetéssel |
 | `_clear_nav_backoff()` | 1998 | NAV backoff törlése sikeres feldolgozás után |
-| `batch_save_new_ids()` | 2627 | Új ID-k feldolgozása cache vagy OPEN_TASKS felé |
+| `batch_save_new_ids()` | 2664 | Új ID-k feldolgozása cache vagy OPEN_TASKS felé |
 
 ## Konfiguráció
 
@@ -329,9 +331,9 @@ Timeout #1  →  Várj ~10s   →  Újrapróbálkozás
 | `OPEN_TASKS_MAX` | 5000 | OPEN_TASKS maximális méret |
 | `GROUP_NEXT_OPEN_QUEUE.maxsize` | 2000 | GROUP/NEXT queue maximális méret |
 | `PAIR_TIMEOUT_SEC` | 20 | Link feloldási timeout (másodperc) |
-| `NAV_WORKER_MAX_PAIRS` | 6 | Egyidejűleg feldolgozott párok száma |
-| `NAV_RETRY_BASE` | ~10 | Alapértelmezett újrapróbálkozási várakozás (mp) |
-| `NAV_RETRY_MAX` | ? | Maximum újrapróbálkozási várakozás (mp) |
+| `NAV_WORKER_MAX_PAIRS` | 11 | Egyidejűleg feldolgozott párok száma |
+| `NAV_RETRY_BASE` | 20 | Alapértelmezett újrapróbálkozási várakozás (másodperc) |
+| `NAV_RETRY_MAX` | 300 | Maximum újrapróbálkozási várakozás (másodperc = 5 perc) |
 
 ## Összefoglalás
 

@@ -1996,10 +1996,10 @@ def _schedule_nav_backoff(tid: str):
     - Exponenciálisan növekvő várakozási idővel újrapróbálkozik
     
     Példa timeline:
-    - 1. timeout után: ~10 másodperc várakozás
-    - 2. timeout után: ~20 másodperc várakozás  
-    - 3. timeout után: ~40 másodperc várakozás
-    - Maximum: NAV_RETRY_MAX másodperc
+    - 1. timeout után: 20 másodperc várakozás
+    - 2. timeout után: 40 másodperc várakozás  
+    - 3. timeout után: 80 másodperc várakozás
+    - Maximum: NAV_RETRY_MAX = 300 másodperc (5 perc)
     
     A batch_save_new_ids() automatikusan újrapróbálkozik, amikor a backoff lejár.
     """
@@ -2536,11 +2536,11 @@ def background_nav_worker():
     NAV-only: OPEN_TASKS folyamatos feldolgozása háttérben.
     
     Ez a worker thread folyamatosan:
-    1. Kivesz max NAV_WORKER_MAX_PAIRS (6) taskot az OPEN_TASKS sorból
+    1. Kivesz max NAV_WORKER_MAX_PAIRS (11) taskot az OPEN_TASKS sorból
     2. NAV-on keresztül feloldja a linkeket (20 másodperces timeout)
     3. Eredmények alapján:
        - Sikeres → SAVE dispatcher
-       - Timeout/Invalid → NAV backoff (exponenciális újrapróbálkozás)
+       - Timeout/Invalid → NAV backoff (exponenciális újrapróbálkozás: 20s, 40s, 80s...)
        - Feldolgozási hiba → visszarakja a sorba (max 2x retry)
     
     FONTOS: Ha timeout történik, a task NEM kerül vissza azonnal OPEN_TASKS-ba.

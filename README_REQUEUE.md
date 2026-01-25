@@ -10,9 +10,10 @@
 
 **2. 20mp timeout után azonnal visszakerül a listába?**
 - **NEM!** Exponenciális backoff rendszerbe kerül:
-  - 1. timeout: ~10s várakozás
-  - 2. timeout: ~20s várakozás  
-  - 3. timeout: ~40s várakozás
+  - 1. timeout: 20s várakozás
+  - 2. timeout: 40s várakozás  
+  - 3. timeout: 80s várakozás
+  - Maximum: 300s (5 perc)
 
 **3. Részletes dokumentáció:**
 Lásd: [REQUEUE_SYSTEM_DOCUMENTATION.md](./REQUEUE_SYSTEM_DOCUMENTATION.md)
@@ -29,9 +30,10 @@ Lásd: [REQUEUE_SYSTEM_DOCUMENTATION.md](./REQUEUE_SYSTEM_DOCUMENTATION.md)
 
 **2. Does it immediately return to the list after 20s timeout?**
 - **NO!** It enters an exponential backoff system:
-  - 1st timeout: ~10s wait
-  - 2nd timeout: ~20s wait
-  - 3rd timeout: ~40s wait
+  - 1st timeout: 20s wait
+  - 2nd timeout: 40s wait
+  - 3rd timeout: 80s wait
+  - Maximum: 300s (5 minutes)
 
 **3. Detailed documentation:**
 See: [REQUEUE_SYSTEM_DOCUMENTATION.md](./REQUEUE_SYSTEM_DOCUMENTATION.md)
@@ -62,6 +64,8 @@ These comments explain:
 |----------|-------|-------------|
 | `PAIR_TIMEOUT_SEC` | 20 | Link resolution timeout (seconds) |
 | `OPEN_TASKS_MAX` | 5000 | Maximum OPEN_TASKS queue size |
-| `NAV_WORKER_MAX_PAIRS` | 6 | Concurrent pairs processed |
+| `NAV_WORKER_MAX_PAIRS` | 11 | Concurrent pairs processed |
+| `NAV_RETRY_BASE` | 20 | Base retry delay (seconds) |
+| `NAV_RETRY_MAX` | 300 | Maximum retry delay (seconds = 5 minutes) |
 
 For more details, see the full documentation.
