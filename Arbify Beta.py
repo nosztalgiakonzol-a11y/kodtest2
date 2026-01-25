@@ -2015,8 +2015,8 @@ def _schedule_nav_backoff(tid: str):
     nav_backoff_consecutive += 1
     warn(f"⏳ NAV backoff id={tid} {int(delay)}s (attempt={att})")
 
-    if nav_backoff_consecutive >= 10:
-        force_main_refresh("10 consecutive NAV backoffs")
+    if nav_backoff_consecutive >= 15:
+        force_main_refresh("15 consecutive NAV backoffs")
         nav_backoff_consecutive = 0
 
 def _clear_nav_backoff(tid: str):
@@ -2910,6 +2910,10 @@ def maybe_refresh_group_tab(url: str, info: dict) -> bool:
         info["next_refresh"] = now + _rand_group_refresh_interval()
         return False
     if now < info.get("next_refresh", 0):
+        return False
+
+    handle = info.get("handle")
+    if handle and handle not in driver.window_handles:
         return False
 
     ok = False
