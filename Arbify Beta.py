@@ -4653,17 +4653,17 @@ if __name__ == "__main__":
     except Exception:
         MAIN_HANDLE = None
 
+    # GROUP/NEXT tab-nyitó háttér worker - BOOTSTRAP ELŐTT indul!
+    groupnext_thread = threading.Thread(target=group_next_opener_worker, daemon=True)
+    groupnext_thread.start()
+    log("🚀 Group/NEXT opener worker elindítva (BOOTSTRAP előtt)")
+
     # Dinamikus BOOTSTRAP futtatása
     run_dynamic_bootstrap()
 
     # NAV worker: csak BOOTSTRAP UTÁN indul
     nav_thread = None
     nav_started = False
-
-    # GROUP/NEXT tab-nyitó háttér worker
-    groupnext_thread = threading.Thread(target=group_next_opener_worker, daemon=True)
-    groupnext_thread.start()
-    log("🚀 Group/NEXT opener worker elindítva")
 
     # Időszakos TAB cleanup worker
     tab_cleanup_thread = threading.Thread(target=tab_cleanup_worker, daemon=True)
