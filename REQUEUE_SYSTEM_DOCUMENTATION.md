@@ -1,5 +1,23 @@
 # Requeue és Task Lista Rendszer Dokumentáció
 
+## Gyors Összefoglaló / Quick Summary
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ❓ Kérdés 1: Többször szerepelhet egy elem a task listán?      │
+│  ✅ Válasz: Védett, de max 2x újrapróbálkozás hiba esetén       │
+├─────────────────────────────────────────────────────────────────┤
+│  ❓ Kérdés 2: 20mp timeout után azonnal vissza a listába?       │
+│  ❌ Válasz: NEM! Exponenciális backoff: 20s → 40s → 80s...      │
+├─────────────────────────────────────────────────────────────────┤
+│  📊 Kulcs paraméterek:                                          │
+│     • PAIR_TIMEOUT_SEC = 20 másodperc                           │
+│     • NAV_RETRY_BASE = 20 másodperc (első backoff)              │
+│     • NAV_RETRY_MAX = 300 másodperc (max backoff = 5 perc)      │
+│     • NAV_WORKER_MAX_PAIRS = 11 (párhuzamos feldolgozás)        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ## Áttekintés
 
 Ez a dokumentáció részletesen elmagyarázza, hogyan működik a requeue (újrapróbálkozás) és a task lista rendszer az Arbify Beta alkalmazásban.
