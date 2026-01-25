@@ -1716,17 +1716,11 @@ OPEN_TASKS_MAX = 5000
 
 def enqueue_open_task(task: dict):
     """Feladat (tbody-id) nyitásának előkészítése lookahead-dal.
-       Csak akkor tesszük be, ha még nincs link-final megoldva azonnal.
-       
-       FONTOS: A task TÖBBSZÖR is szerepelhet a listán, ha:
-       - Feldolgozási hiba esetén újrapróbálkozás (max 2x, lásd background_nav_worker)
-       - Ugyanakkor védelem van a duplikáció ellen batch_save_new_ids()-ban
-    """
+       Csak akkor tesszük be, ha még nincs link-final megoldva azonnal."""
     try:
         if len(OPEN_TASKS) < OPEN_TASKS_MAX:
             OPEN_TASKS.append(task)
         else:
-            # Túlcsordulás védelem: dobja a legrégebbit és hozzáadja az újat
             warn("⚠️ OPEN_TASKS megtelt, dobom a legrégebbit")
             OPEN_TASKS.popleft()
             OPEN_TASKS.append(task)
@@ -1988,21 +1982,6 @@ def force_main_refresh(reason: str = ""):
         warn(f"⚠️ MAIN forced refresh failed: {e}")
 
 def _schedule_nav_backoff(tid: str):
-    """
-    NAV backoff exponenciális újrapróbálkozási mechanizmus.
-    
-    Ha egy tbody link feloldása sikertelen (timeout vagy invalid URL):
-    - NEM kerül azonnal vissza a task listába
-    - Exponenciálisan növekvő várakozási idővel újrapróbálkozik
-    
-    Példa timeline:
-    - 1. timeout után: 20 másodperc várakozás
-    - 2. timeout után: 40 másodperc várakozás  
-    - 3. timeout után: 80 másodperc várakozás
-    - Maximum: NAV_RETRY_MAX = 300 másodperc (5 perc)
-    
-    A batch_save_new_ids() automatikusan újrapróbálkozik, amikor a backoff lejár.
-    """
     global nav_backoff_consecutive
     att = nav_retry_attempts.get(tid, 0) + 1
     nav_retry_attempts[tid] = att
@@ -2163,14 +2142,10 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
         return finals_by_pair, states_by_pair
 
     open_elapsed = time.time() - t0
-    deadline = time.time() + (PAIR_TIMEOUT_SEC or 0.0)  # 20 másodperces timeout
+    deadline = time.time() + (PAIR_TIMEOUT_SEC or 0.0)
     last_dbg = 0.0
 
     # 2) Polling CDP-vel (biztonságosan)
-    # TIMEOUT KEZELÉS: Ha 20 másodperc alatt nem sikerül feloldani a linkeket,
-    # a maradék párok ("timeout", "timeout") státuszt kapnak.
-    # Ez NEM jelenti azt, hogy azonnal visszakerülnek OPEN_TASKS-ba!
-    # Lásd: background_nav_worker() → _schedule_nav_backoff() → exponenciális backoff
     while tracking and time.time() < deadline:
         info = _safe_cdp_cmd("Target.getTargets", {}, label="RR getTargets")
         if not isinstance(info, dict):
@@ -2534,17 +2509,6 @@ def resolve_two_final_urls(href1, href2,
 def background_nav_worker():
     """
     NAV-only: OPEN_TASKS folyamatos feldolgozása háttérben.
-    
-    Ez a worker thread folyamatosan:
-    1. Kivesz max NAV_WORKER_MAX_PAIRS (11) taskot az OPEN_TASKS sorból
-    2. NAV-on keresztül feloldja a linkeket (20 másodperces timeout)
-    3. Eredmények alapján:
-       - Sikeres → SAVE dispatcher
-       - Timeout/Invalid → NAV backoff (exponenciális újrapróbálkozás: 20s, 40s, 80s...)
-       - Feldolgozási hiba → visszarakja a sorba (max 2x retry)
-    
-    FONTOS: Ha timeout történik, a task NEM kerül vissza azonnal OPEN_TASKS-ba.
-    Ehelyett NAV backoff-ba kerül, és batch_save_new_ids() újra megpróbálja később.
     """
     global link_cache, DRIVER_DEAD
 
@@ -2624,10 +2588,6 @@ def background_nav_worker():
                         _clear_nav_backoff(tbody_id)
                     else:
                         # minden nem 'ok' (beleértve a timeout-ot) → NAV backoff
-                        # TIMEOUT ESETÉN: a task NEM kerül vissza azonnal OPEN_TASKS-ba!
-                        # Ehelyett exponenciális backoff-ba kerül (~10s, ~20s, ~40s...)
-                        # A batch_save_new_ids() automatikusan újrapróbálkozik, amikor lejár
-                        
                         # Részletes log hogy miért bukott el a valid_external
                         f1_valid = valid_external(f1)
                         f2_valid = valid_external(f2)
@@ -2648,12 +2608,11 @@ def background_nav_worker():
                     if _is_driver_connection_error(task_err):
                         raise
                     
-                    # FELDOLGOZÁSI HIBA esetén: task visszakerül OPEN_TASKS-ba
-                    # Maximum 2 újrapróbálkozás, utána végleg elvetve
+                    # Egyéb hiba → task visszarakása queue végére (max 2x retry)
                     retry_count = task.get("_retry_count", 0)
                     if retry_count < 2:
                         task["_retry_count"] = retry_count + 1
-                        OPEN_TASKS.append(task)  # ← Visszarakjuk a sor végére
+                        OPEN_TASKS.append(task)
                         warn(f"⚠️ Task feldolgozás hiba, újrapróbálás ({retry_count+1}/2): {task.get('id')} - {task_err}")
                     else:
                         warn(f"❌ Task végleg elvetve 2 sikertelen próbálkozás után: {task.get('id')}")
@@ -2672,14 +2631,6 @@ def batch_save_new_ids(new_ids: list, higher_ids: set | None = None):
       azonnal SAVE.
     - Különben betesszük a globális OPEN_TASKS várólistába, és
       a fő while-loop végén hívott process_open_tasks() nyitja meg /nav-on át.
-    
-    DUPLIKÁCIÓ VÉDELEM:
-    - Ellenőrzi a 'seen' halmazt (már feldolgozott ID-k)
-    - Kiszűri a NAV backoff alatt lévő ID-ket (exponenciális újrapróbálkozás várakozás)
-    - Higher priority ID-k szűrése
-    
-    Ez a függvény automatikusan újrapróbálkozik a NAV backoff alatt lévő ID-kkel,
-    amikor a várakozási idő lejár.
     """
     # 🔒 BOOTSTRAP alatt (első 50 mp) nem indítunk új SAVE/NAV feloldást,
     # csak gyűjtjük az ID-ket és nyitjuk a tabokat.
@@ -2699,7 +2650,6 @@ def batch_save_new_ids(new_ids: list, higher_ids: set | None = None):
         if higher_ids and tid in higher_ids:
             continue
         # NAV-backoff: ha várunk még, most ne próbálkozzunk vele
-        # Ez biztosítja, hogy timeout után NEM azonnal kerül vissza a listába
         until = nav_retry_until.get(tid, 0)
         if until and now < until:
             continue
