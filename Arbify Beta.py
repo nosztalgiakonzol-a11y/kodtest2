@@ -162,7 +162,7 @@ RESOLVE_POLL_INTERVAL = 0
 HANDLE_WAIT_TIMEOUT = 0.5
 HEADLESS = False
 
-FIX_URL_WAIT_SEC = 20
+FIX_URL_WAIT_SEC = 18.5
 NAV_HARD_LIMIT_SEC = 20.0
 
 NAV_DEBUG_INTERVAL = 2.0  # másodpercenkénti NAV debug log (0 = kikapcsolva)
@@ -174,10 +174,10 @@ TAB_CLEANUP_MIN_AGE = 70.0     # ennél fiatalabb ismeretlen tabot nem zárunk b
 NAV_WORKER_MAX_PAIRS = 11
 
 # Egy párra mennyi ideig várunk maximum (másodpercben)
-PAIR_TIMEOUT_SEC = FIX_URL_WAIT_SEC  # most 20 mp, ugyanaz mint a régi FIX_URL_WAIT_SEC
+PAIR_TIMEOUT_SEC = FIX_URL_WAIT_SEC  # 18.5 mp - optimalizált timeout
 
 # Milyen gyakran kérdezzük le CDP-vel a Target.getTargets-et (másodperc)
-CDP_POLL_INTERVAL = 0.20  # 200 ms - csökkenti CPU terhelést és CDP spam-et
+CDP_POLL_INTERVAL = 0.40  # 400 ms - optimalizált polling rate
 
 # Logoljuk-e, ha egy pár mindkét végső linkje megvan és a pár lezárult
 LOG_PAIR_DONE = True
@@ -2125,12 +2125,21 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
     except Exception:
         handles_before = set()
 
-    # 1) Targetek létrehozása (CDP-safe)
+    # 1) Targetek létrehozása (CDP-safe + window handle validation)
     for idx, p in enumerate(norm):
         if p is None:
             continue
         href1, href2 = p
         created_any = False
+
+        # Optimization #1: Window handle validation before CDP operations
+        try:
+            if not driver.window_handles:
+                warn(f"[RR] Nincs window handle idx={idx} előtt, skip target creation")
+                continue
+        except Exception:
+            warn(f"[RR] Window handle validation hiba idx={idx}, skip target creation")
+            continue
 
         # első oldal
         res1 = _safe_cdp_cmd(
@@ -2204,7 +2213,11 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
 
             if done_pairs[pair_idx]:
                 # ezt a párt már lezártuk; a maradék targetet is bezárhatjuk
-                _safe_cdp_cmd("Target.closeTarget", {"targetId": tid}, label="RR closeTarget (pair already done)")
+                # Optimization #3: Robust CDP cleanup with try-except
+                try:
+                    _safe_cdp_cmd("Target.closeTarget", {"targetId": tid}, label="RR closeTarget (pair already done)")
+                except Exception:
+                    pass  # Silent fail ha már bezárva vagy hiba van
                 tracking.pop(tid, None)
                 continue
 
@@ -2224,7 +2237,11 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
                 # csukjuk be a párhoz tartozó összes targetet
                 to_close = [tid2 for tid2, info2 in tracking.items() if info2["pair"] == pair_idx]
                 for tid2 in to_close:
-                    _safe_cdp_cmd("Target.closeTarget", {"targetId": tid2}, label="RR closeTarget (pair done)")
+                    # Optimization #3: Robust CDP cleanup with try-except
+                    try:
+                        _safe_cdp_cmd("Target.closeTarget", {"targetId": tid2}, label="RR closeTarget (pair done)")
+                    except Exception:
+                        pass  # Silent fail ha már bezárva vagy hiba van
                     tracking.pop(tid2, None)
 
                 if LOG_PAIR_DONE:
@@ -2237,10 +2254,14 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
 
         time.sleep(CDP_POLL_INTERVAL)
 
-    # 3) Timeout után: minden maradék target bezárása (safe CDP + fallback)
+    # 3) Timeout után: minden maradék target bezárása (safe CDP + fallback + Optimization #3)
     failed_cdp_closes = []
     for tid in list(tracking.keys()):
-        result = _safe_cdp_cmd("Target.closeTarget", {"targetId": tid}, label="RR closeTarget (timeout)")
+        # Optimization #3: Robust CDP cleanup with try-except
+        try:
+            result = _safe_cdp_cmd("Target.closeTarget", {"targetId": tid}, label="RR closeTarget (timeout)")
+        except Exception:
+            result = None  # Silent fail
         tracking.pop(tid, None)
         
         # Ha CDP nem működött, jegyezzük fel
@@ -2272,7 +2293,20 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
             
             if extra_handles:
                 warn(f"[RR] {len(failed_cdp_closes)} CDP closeTarget sikertelen, {len(extra_handles)} extra ablak – Selenium fallback bezárás")
-                original_handle = driver.current_window_handle if driver.current_window_handle in current_handles else None
+                
+                # Optimization #5: Window context save robustness
+                original_handle = None
+                try:
+                    original_handle = driver.current_window_handle
+                    if original_handle not in driver.window_handles:
+                        # Current handle már nem él, fallback az első elérhető handle-re
+                        original_handle = driver.window_handles[0] if driver.window_handles else None
+                except Exception:
+                    # Ha bármilyen hiba van, fallback
+                    try:
+                        original_handle = driver.window_handles[0] if driver.window_handles else None
+                    except Exception:
+                        original_handle = None
                 
                 for handle in extra_handles:
                     try:
