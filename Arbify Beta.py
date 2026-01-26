@@ -3134,6 +3134,10 @@ def _open_group_tab_sync(group_url: str):
         original = driver.current_window_handle
     except Exception:
         original = None
+    
+    # Extra safety: check if original handle still exists
+    if original and original not in driver.window_handles:
+        original = None
 
     try:
         driver.switch_to.new_window('tab')
@@ -3151,8 +3155,11 @@ def _open_group_tab_sync(group_url: str):
                 driver.close()
             except Exception:
                 pass
-            if original and original in driver.window_handles:
-                driver.switch_to.window(original)
+            try:
+                if original and original in driver.window_handles:
+                    driver.switch_to.window(original)
+            except Exception:
+                pass
             block_group_url(group_url, GROUP_REOPEN_BACKOFF_SEC, "empty-at-open")
             return
 
@@ -3165,8 +3172,11 @@ def _open_group_tab_sync(group_url: str):
             "next_refresh": now + _rand_group_refresh_interval(),
             "needs_scan": True,
         }
-        if original and original in driver.window_handles:
-            driver.switch_to.window(original)
+        try:
+            if original and original in driver.window_handles:
+                driver.switch_to.window(original)
+        except Exception:
+            pass
         log(f"🆕 Group tab nyitva (sync): {group_url}")
         return
     except Exception as e:
@@ -3217,6 +3227,10 @@ def _open_next_tab_sync(next_url: str):
         original = driver.current_window_handle
     except Exception:
         original = None
+    
+    # Extra safety: check if original handle still exists
+    if original and original not in driver.window_handles:
+        original = None
 
     try:
         driver.switch_to.new_window('tab')
@@ -3234,8 +3248,11 @@ def _open_next_tab_sync(next_url: str):
                 driver.close()
             except Exception:
                 pass
-            if original and original in driver.window_handles:
-                driver.switch_to.window(original)
+            try:
+                if original and original in driver.window_handles:
+                    driver.switch_to.window(original)
+            except Exception:
+                pass
             log(f"🔒 NEXT zárva üres miatt (sync): {next_url}")
             return
 
@@ -3249,8 +3266,11 @@ def _open_next_tab_sync(next_url: str):
             "needs_scan": True,
         }
 
-        if original and original in driver.window_handles:
-            driver.switch_to.window(original)
+        try:
+            if original and original in driver.window_handles:
+                driver.switch_to.window(original)
+        except Exception:
+            pass
         log(f"🆕 NEXT tab nyitva (sync): {next_url}")
         return
     except Exception as e:
