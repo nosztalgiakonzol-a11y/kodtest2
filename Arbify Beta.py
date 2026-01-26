@@ -558,11 +558,18 @@ chrome_options.add_argument("--disable-translate")
 chrome_options.add_argument("--disable-infobars")
 chrome_options.add_argument("--disable-sync")
 chrome_options.add_argument("--disable-client-side-phishing-detection")
-chrome_options.add_argument("--disable-gpu")
+# GPU disabled only in headless mode (see line 546)
 chrome_options.add_argument("--disable-dev-shm-usage")
 chrome_options.add_argument("--disable-blink-features=AutomationControlled")
 chrome_options.add_argument("--window-size=960,540")
 chrome_options.add_argument("--disable-popup-blocking")
+
+# Performance optimizations: reduce RAM usage and speed up page loads
+chrome_options.add_argument("--blink-settings=imagesEnabled=false")  # Disable images
+chrome_options.add_argument("--disable-remote-fonts")  # Disable remote fonts
+chrome_options.add_argument("--disk-cache-size=50000000")  # 50MB disk cache
+chrome_options.add_argument("--media-cache-size=50000000")  # 50MB media cache
+
 chrome_options.add_argument(
     "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
@@ -578,10 +585,11 @@ prefs1 = {
 }
 chrome_options.add_experimental_option("prefs", prefs1)
 
-# Kép / geolocation / camera tiltás
+# Performance optimizations: disable images, CSS, geolocation, etc.
 prefs2 = {
     "profile.default_content_setting_values.popups": 1,
-    "profile.managed_default_content_settings.images": 2,
+    "profile.managed_default_content_settings.images": 2,  # Disable images
+    "profile.managed_default_content_settings.stylesheet": 2,  # Disable CSS
     "profile.managed_default_content_settings.geolocation": 2,
     "profile.managed_default_content_settings.notifications": 2,
     "profile.managed_default_content_settings.media_stream": 2,
