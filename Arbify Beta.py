@@ -3116,6 +3116,25 @@ group_open_pending = set()
 next_open_pending = set()
 
 
+def validate_and_switch_tab(handle, tabs_dict, url, tab_type):
+    """
+    Helper function to validate window handle and switch to tab.
+    Returns True if successful, False otherwise.
+    Cleans up tabs_dict on failure.
+    """
+    if handle not in driver.window_handles:
+        tabs_dict.pop(url, None)
+        log(f"⚠️ {tab_type} tab bezárva, eltávolítva: {handle[:8] if handle else 'None'}")
+        return False
+    try:
+        driver.switch_to.window(handle)
+        return True
+    except Exception as e:
+        tabs_dict.pop(url, None)
+        log(f"⚠️ {tab_type} tab hiba, eltávolítva: {handle[:8] if handle else 'None'} - {str(e)[:50]}")
+        return False
+
+
 def _open_group_tab_sync(group_url: str):
     """
     Régi open_group_tab_if_needed logika, de külön függvényben.
@@ -4707,15 +4726,7 @@ if __name__ == "__main__":
         items = list(next_tabs.items())
         for url, info in items:
             handle = info["handle"]
-            try:
-                if handle not in driver.window_handles:
-                    next_tabs.pop(url, None)
-                    log(f"⚠️ NEXT tab bezárva, eltávolítva: {handle[:8] if handle else 'None'}")
-                    continue
-                driver.switch_to.window(handle)
-            except Exception as e:
-                next_tabs.pop(url, None)
-                log(f"⚠️ NEXT tab hiba, eltávolítva: {handle[:8] if handle else 'None'} - {str(e)[:50]}")
+            if not validate_and_switch_tab(handle, next_tabs, url, "NEXT"):
                 to_close.append(url)
                 continue
 
@@ -4734,12 +4745,6 @@ if __name__ == "__main__":
                 if should_close:
                     to_close.append(url)
 
-            try:
-                if driver.window_handles:
-                    driver.switch_to.window(MAIN_HANDLE or driver.window_handles[0])
-            except Exception:
-                pass
-
         return next_all_curr_ids, pending_deletes, to_close, open_requests
 
     def scan_group_tabs_evented(curr_ids_main: set, higher_ids: set):
@@ -4750,15 +4755,7 @@ if __name__ == "__main__":
         items = list(group_tabs.items())
         for url, info in items:
             handle = info["handle"]
-            try:
-                if handle not in driver.window_handles:
-                    group_tabs.pop(url, None)
-                    log(f"⚠️ GROUP tab bezárva, eltávolítva: {handle[:8] if handle else 'None'}")
-                    continue
-                driver.switch_to.window(handle)
-            except Exception as e:
-                group_tabs.pop(url, None)
-                log(f"⚠️ GROUP tab hiba, eltávolítva: {handle[:8] if handle else 'None'} - {str(e)[:50]}")
+            if not validate_and_switch_tab(handle, group_tabs, url, "GROUP"):
                 to_close.append(url)
                 continue
 
@@ -4774,12 +4771,6 @@ if __name__ == "__main__":
                 pending_deletes.extend(pend_del)
                 if should_close:
                     to_close.append(url)
-
-            try:
-                if driver.window_handles:
-                    driver.switch_to.window(MAIN_HANDLE or driver.window_handles[0])
-            except Exception:
-                pass
 
         return group_all_curr_ids, pending_deletes, to_close
 
@@ -4868,32 +4859,72 @@ if __name__ == "__main__":
             curr_ids_main = set()
             new_ids_main = []
 
-            for tbody in tbodys_main:
-                try:
-                    tbody_id = tbody.get_attribute("data-id") or tbody.get_attribute("dataid")
-                except Exception:
-                    tbody_id = None
-                if not tbody_id:
-                    continue
+            # Optimization #3: Batch collect all tbody IDs using execute_script for faster DOM access
+            try:
+                tbody_data = driver.execute_script("""
+                    const tbodys = document.querySelectorAll('tbody.surebet_record');
+                    return Array.from(tbodys).map(tb => ({
+                        id: tb.getAttribute('data-id') || tb.getAttribute('dataid'),
+                        element: tb
+                    })).filter(item => item.id);
+                """)
+            except Exception:
+                tbody_data = []
 
-                curr_ids_main.add(tbody_id)
-                last_seen_ts[tbody_id] = now_ts
-                id_source[tbody_id] = 'main'
+            # If batch failed, fallback to old method
+            if not tbody_data:
+                for tbody in tbodys_main:
+                    try:
+                        tbody_id = tbody.get_attribute("data-id") or tbody.get_attribute("dataid")
+                    except Exception:
+                        tbody_id = None
+                    if not tbody_id:
+                        continue
 
-                # GROUP linkek folyamatos keresése + tabnyitás (BOOTSTRAP alatt is)
-                try:
-                    group_url = find_group_link_in_tbody(tbody)
-                    if group_url:
-                        open_group_tab_if_needed(group_url)
-                except Exception:
-                    pass
+                    curr_ids_main.add(tbody_id)
+                    last_seen_ts[tbody_id] = now_ts
+                    id_source[tbody_id] = 'main'
 
-                # BOOTSTRAP alatt is megkülönböztetjük, mi seen, mi új,
-                # de a SAVE/UPDATE úgyis no-op lesz a gating miatt.
-                if tbody_id in seen:
-                    handle_update_for_id(tbody_id)
-                else:
-                    new_ids_main.append(tbody_id)
+                    # GROUP linkek folyamatos keresése + tabnyitás (BOOTSTRAP alatt is)
+                    try:
+                        group_url = find_group_link_in_tbody(tbody)
+                        if group_url:
+                            open_group_tab_if_needed(group_url)
+                    except Exception:
+                        pass
+
+                    # BOOTSTRAP alatt is megkülönböztetjük, mi seen, mi új,
+                    # de a SAVE/UPDATE úgyis no-op lesz a gating miatt.
+                    if tbody_id in seen:
+                        handle_update_for_id(tbody_id)
+                    else:
+                        new_ids_main.append(tbody_id)
+            else:
+                # Fast path: process batched data
+                for item in tbody_data:
+                    tbody_id = item.get('id')
+                    if not tbody_id:
+                        continue
+                    
+                    curr_ids_main.add(tbody_id)
+                    last_seen_ts[tbody_id] = now_ts
+                    id_source[tbody_id] = 'main'
+
+                    # GROUP linkek - still need element reference
+                    tbody_elem = item.get('element')
+                    if tbody_elem:
+                        try:
+                            group_url = find_group_link_in_tbody(tbody_elem)
+                            if group_url:
+                                open_group_tab_if_needed(group_url)
+                        except Exception:
+                            pass
+
+                    # BOOTSTRAP alatt is megkülönböztetjük, mi seen, mi új
+                    if tbody_id in seen:
+                        handle_update_for_id(tbody_id)
+                    else:
+                        new_ids_main.append(tbody_id)
 
             # Új ID-k NAV-queue-be (BOOTSTRAP alatt csak "előkészül", de nem küldünk)
             batch_save_new_ids(new_ids_main)
@@ -5008,7 +5039,9 @@ if __name__ == "__main__":
             if DIAG_LOGGER.loop_iteration % 20 == 0:  # Minden 20. iterációnál
                 try:
                     open_tasks_len = len(OPEN_TASKS) if OPEN_TASKS else 0
+                    active_ids_count = len(active_ids) if active_ids else 0
                     DIAG_LOGGER.log_queue_status(open_tasks=open_tasks_len)
+                    log(f"📊 Active IDs: {active_ids_count}")
                 except Exception:
                     pass
             
