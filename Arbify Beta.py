@@ -1850,15 +1850,8 @@ OPEN_TASKS_MAX = 5000
 
 def enqueue_open_task(task: dict):
     """Feladat (tbody-id) nyitásának előkészítése lookahead-dal.
-       Csak akkor tesszük be, ha még nincs link-final megoldva azonnal.
-       Duplikáció ellenőrzéssel - ugyanaz az ID csak egyszer lehet a queue-ban."""
+       Csak akkor tesszük be, ha még nincs link-final megoldva azonnal."""
     try:
-        tbody_id = task.get("id")
-        
-        # Deduplication check: skip if already in queue
-        if any(t.get("id") == tbody_id for t in OPEN_TASKS):
-            return  # Already queued, skip
-        
         if len(OPEN_TASKS) < OPEN_TASKS_MAX:
             OPEN_TASKS.append(task)
         else:
@@ -2807,9 +2800,15 @@ def background_nav_worker():
                     if _is_driver_connection_error(task_err):
                         raise
                     
-                    # Egyéb hiba → task eldobása, scraper majd újra felveszi természetes módon
+                    # Egyéb hiba → retry up to 2 times
                     tbody_id = task.get('id', 'N/A')
-                    warn(f"⚠️ Task feldolgozás hiba, eldobva (scraper majd újra felveszi): {tbody_id} - {task_err}")
+                    retry_count = task.get("_retry_count", 0)
+                    if retry_count < 2:
+                        task["_retry_count"] = retry_count + 1
+                        OPEN_TASKS.append(task)
+                        warn(f"⚠️ Task feldolgozás hiba, újrapróbálás ({retry_count+1}/2): {tbody_id}")
+                    else:
+                        warn(f"⚠️ Task feldolgozás hiba, eldobva (2 retry után): {tbody_id} - {task_err}")
 
             save_link_cache(link_cache)
 
