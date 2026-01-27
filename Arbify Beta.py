@@ -609,15 +609,18 @@ def create_chrome_options():
 
 # 🔥 Chrome indítása egyszer, tisztán
 try:
-    driver = uc.Chrome(options=create_chrome_options(), version_main=143)
+    # Let undetected-chromedriver auto-detect Chrome version (no version_main specified)
+    driver = uc.Chrome(options=create_chrome_options())
+    print("✅ Chrome elindult sikeresen (auto-detected version)")
 except Exception as e:
-    print(f"First Chrome start attempt failed: {e}")
-    try:
-        # Create a FRESH ChromeOptions object for retry (cannot reuse the same one)
-        driver = uc.Chrome(options=create_chrome_options())
-    except Exception as e2:
-        print(f"❌ Chrome start FAILED: {e2}")
-        raise SystemExit(1)
+    print(f"❌ Chrome indítási hiba: {e}")
+    print("\n🔧 Lehetséges megoldások:")
+    print("  1. Ellenőrizd hogy Chrome telepítve van")
+    print("  2. Futtasd újra rendszergazdaként")
+    print("  3. Töröld a temp fájlokat: taskkill /F /IM chrome.exe && taskkill /F /IM chromedriver.exe")
+    print("  4. Próbáld meg újraindítani a gépet")
+    print("  5. Telepítsd újra a Chrome-ot: https://www.google.com/chrome/")
+    raise SystemExit(1)
 
 uc.Chrome.__del__ = lambda self: None
 
