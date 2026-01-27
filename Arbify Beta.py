@@ -710,7 +710,7 @@ def start_chrome_with_fallbacks():
     print("\n1. CHROME ÚJRATELEPÍTÉSE:")
     print("   - Távolítsd el a Chrome-ot: Vezérlőpult -> Programok")
     print("   - Töröld a maradék fájlokat:")
-    print(f"     rmdir /S /Q \"{os.path.expandvars('%LOCALAPPDATA%\\Google')}\"")
+    print(f'     rmdir /S /Q "{os.path.expandvars("%LOCALAPPDATA%\\Google")}"')
     print("   - Telepítsd újra: https://www.google.com/chrome/")
     
     print("\n2. PYTHON CSOMAGOK FRISSÍTÉSE:")
