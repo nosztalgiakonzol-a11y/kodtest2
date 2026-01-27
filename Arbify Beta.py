@@ -540,76 +540,81 @@ def save_link_cache(cache: dict):
 PROFILE_DIR = ACTIVE_ACCOUNT["profile_dir"]
 os.makedirs(PROFILE_DIR, exist_ok=True)
 
-chrome_options = Options()
+def create_chrome_options():
+    """Create a fresh ChromeOptions object with all necessary configuration."""
+    chrome_options = Options()
 
-if HEADLESS:
-    chrome_options.add_argument("--headless=new")
+    if HEADLESS:
+        chrome_options.add_argument("--headless=new")
 
-# 🔥 Minden account a saját fix profilkönyvtárát használja
-chrome_options.add_argument(f"--user-data-dir={PROFILE_DIR}")
+    # 🔥 Minden account a saját fix profilkönyvtárát használja
+    chrome_options.add_argument(f"--user-data-dir={PROFILE_DIR}")
 
-# (Opcionális) ha akarod mellé, maradhat az incognito is, de nem szükséges:
-# chrome_options.add_argument("--incognito")
+    # (Opcionális) ha akarod mellé, maradhat az incognito is, de nem szükséges:
+    # chrome_options.add_argument("--incognito")
 
-# Gyorsító / tiltó flag-ek
-chrome_options.add_argument("--disable-features=OptimizationHints,TranslateUI")
-chrome_options.add_argument("--disable-site-isolation-trials")
-chrome_options.add_argument("--disable-translate")
-chrome_options.add_argument("--disable-infobars")
-chrome_options.add_argument("--disable-sync")
-chrome_options.add_argument("--disable-client-side-phishing-detection")
-# GPU disabled only in headless mode (see line 546)
-chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-chrome_options.add_argument("--window-size=960,540")
-chrome_options.add_argument("--disable-popup-blocking")
+    # Gyorsító / tiltó flag-ek
+    chrome_options.add_argument("--disable-features=OptimizationHints,TranslateUI")
+    chrome_options.add_argument("--disable-site-isolation-trials")
+    chrome_options.add_argument("--disable-translate")
+    chrome_options.add_argument("--disable-infobars")
+    chrome_options.add_argument("--disable-sync")
+    chrome_options.add_argument("--disable-client-side-phishing-detection")
+    # GPU disabled only in headless mode (see line 546)
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("--window-size=960,540")
+    chrome_options.add_argument("--disable-popup-blocking")
 
-# Performance optimizations: reduce RAM usage and speed up page loads
-chrome_options.add_argument("--blink-settings=imagesEnabled=false")  # Disable images
-chrome_options.add_argument("--disable-remote-fonts")  # Disable remote fonts
-chrome_options.add_argument("--disk-cache-size=50000000")  # 50MB disk cache
-chrome_options.add_argument("--media-cache-size=50000000")  # 50MB media cache
+    # Performance optimizations: reduce RAM usage and speed up page loads
+    chrome_options.add_argument("--blink-settings=imagesEnabled=false")  # Disable images
+    chrome_options.add_argument("--disable-remote-fonts")  # Disable remote fonts
+    chrome_options.add_argument("--disk-cache-size=50000000")  # 50MB disk cache
+    chrome_options.add_argument("--media-cache-size=50000000")  # 50MB media cache
 
-chrome_options.add_argument(
-    "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
-)
+    chrome_options.add_argument(
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+    )
 
-# Prefs 1
-prefs1 = {
-    "credentials_enable_service": False,
-    "profile.password_manager_enabled": False,
-    "profile.default_content_setting_values.notifications": 2,
-    "translate_whitelists": {"lt": "en"},
-    "translate": {"enabled": "true"},
-}
-chrome_options.add_experimental_option("prefs", prefs1)
+    # Prefs 1
+    prefs1 = {
+        "credentials_enable_service": False,
+        "profile.password_manager_enabled": False,
+        "profile.default_content_setting_values.notifications": 2,
+        "translate_whitelists": {"lt": "en"},
+        "translate": {"enabled": "true"},
+    }
+    chrome_options.add_experimental_option("prefs", prefs1)
 
-# Performance optimizations: disable images, CSS, geolocation, etc.
-prefs2 = {
-    "profile.default_content_setting_values.popups": 1,
-    "profile.managed_default_content_settings.images": 2,  # Disable images
-    "profile.managed_default_content_settings.stylesheet": 2,  # Disable CSS
-    "profile.managed_default_content_settings.geolocation": 2,
-    "profile.managed_default_content_settings.notifications": 2,
-    "profile.managed_default_content_settings.media_stream": 2,
-}
-chrome_options.add_experimental_option("prefs", prefs2)
+    # Performance optimizations: disable images, CSS, geolocation, etc.
+    prefs2 = {
+        "profile.default_content_setting_values.popups": 1,
+        "profile.managed_default_content_settings.images": 2,  # Disable images
+        "profile.managed_default_content_settings.stylesheet": 2,  # Disable CSS
+        "profile.managed_default_content_settings.geolocation": 2,
+        "profile.managed_default_content_settings.notifications": 2,
+        "profile.managed_default_content_settings.media_stream": 2,
+    }
+    chrome_options.add_experimental_option("prefs", prefs2)
 
-# Logging
-try:
-    chrome_options.set_capability("pageLoadStrategy", "eager")
-    chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
-except Exception:
-    pass
+    # Logging
+    try:
+        chrome_options.set_capability("pageLoadStrategy", "eager")
+        chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+    except Exception:
+        pass
+    
+    return chrome_options
 
 # 🔥 Chrome indítása egyszer, tisztán
 try:
-    driver = uc.Chrome(options=chrome_options, version_main=143)
+    driver = uc.Chrome(options=create_chrome_options(), version_main=143)
 except Exception as e:
     print(f"First Chrome start attempt failed: {e}")
     try:
-        driver = uc.Chrome(options=chrome_options)
+        # Create a FRESH ChromeOptions object for retry (cannot reuse the same one)
+        driver = uc.Chrome(options=create_chrome_options())
     except Exception as e2:
         print(f"❌ Chrome start FAILED: {e2}")
         raise SystemExit(1)
