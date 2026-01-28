@@ -909,7 +909,7 @@ def restart_application():
     
     # Restart script
     warn("🔄 Restarting script...")
-    os.execv(sys.executable, ['python'] + sys.argv)
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 # ---------- URL utilok ----------
@@ -4859,10 +4859,13 @@ def restart_with_account(next_key: str):
         pass
 
     # 4) Script újraindítása új accounttal
-    os.execv(
-        sys.executable,
-        [sys.executable, sys.argv[0], f"--acc={next_key}"]
-    )
+    # Build args list preserving all original args except updating --acc
+    new_args = [sys.executable]
+    for arg in sys.argv:
+        if not arg.startswith("--acc="):
+            new_args.append(arg)
+    new_args.append(f"--acc={next_key}")
+    os.execv(sys.executable, new_args)
 
 
 # ---------- fő program ----------
@@ -5244,7 +5247,7 @@ if __name__ == "__main__":
                     restart_with_account(next_key)
                 
                 # Periodically save cumulative runtime (every ~100 iterations)
-                if loop_iter % 100 == 0:
+                if DIAG_LOGGER.loop_iteration % 100 == 0:
                     save_cumulative_runtime(total_runtime_seconds)
 
             # 🔴 NAV worker indítása – CSAK BOOTSTRAP UTÁN
