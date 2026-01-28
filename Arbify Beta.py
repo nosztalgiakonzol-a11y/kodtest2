@@ -2987,7 +2987,10 @@ def maybe_refresh_group_tab(url: str, info: dict) -> bool:
             try {
                 var sc = document.querySelector('div.table-container.product-table-container');
                 if (!sc) { callback({ok:false, err:'container-not-found'}); return; }
-                fetch(window.location.href, {cache:'no-store'})
+                fetch(window.location.href, {
+                    cache:'no-store',
+                    headers: {'Cache-Control': 'no-cache, no-store, must-revalidate'}
+                })
                   .then(r => { if (!r.ok) throw new Error('http-'+r.status); return r.text(); })
                   .then(html => {
                       var parser = new DOMParser();
@@ -2995,9 +2998,42 @@ def maybe_refresh_group_tab(url: str, info: dict) -> bool:
                       var newSc = doc.querySelector('div.table-container.product-table-container');
                       if (!newSc) { callback({ok:false, err:'new-container-not-found'}); return; }
                       var y = window.scrollY;
-                      sc.innerHTML = newSc.innerHTML;
+                      
+                      // Smart differential update: only update changed tbody elements
+                      var oldTbodies = sc.querySelectorAll('tbody');
+                      var newTbodies = newSc.querySelectorAll('tbody');
+                      var updated = 0;
+                      
+                      // Update/add changed tbody elements
+                      for (var i = 0; i < newTbodies.length; i++) {
+                          var newTbody = newTbodies[i];
+                          var newId = newTbody.getAttribute('data-id') || newTbody.getAttribute('dataid') || '';
+                          var oldTbody = oldTbodies[i];
+                          
+                          if (!oldTbody) {
+                              // New tbody - append it
+                              sc.appendChild(newTbody.cloneNode(true));
+                              updated++;
+                          } else {
+                              var oldId = oldTbody.getAttribute('data-id') || oldTbody.getAttribute('dataid') || '';
+                              // Check if changed (by ID or content)
+                              if (oldId !== newId || oldTbody.innerHTML !== newTbody.innerHTML) {
+                                  oldTbody.replaceWith(newTbody.cloneNode(true));
+                                  updated++;
+                              }
+                          }
+                      }
+                      
+                      // Remove excess old tbody elements
+                      for (var i = newTbodies.length; i < oldTbodies.length; i++) {
+                          if (oldTbodies[i] && oldTbodies[i].parentNode) {
+                              oldTbodies[i].remove();
+                              updated++;
+                          }
+                      }
+                      
                       window.scrollTo(0, y);
-                      callback({ok:true});
+                      callback({ok:true, updated:updated, total:newTbodies.length});
                   })
                   .catch(e => callback({ok:false, err:String(e)}));
             } catch(e) { callback({ok:false, err:String(e)}); }
@@ -3146,7 +3182,10 @@ def maybe_refresh_next_tab(url: str, info: dict) -> bool:
             try {
                 var sc = document.querySelector('div.table-container.product-table-container');
                 if (!sc) { callback({ok:false, err:'container-not-found'}); return; }
-                fetch(window.location.href, {cache:'no-store'})
+                fetch(window.location.href, {
+                    cache:'no-store',
+                    headers: {'Cache-Control': 'no-cache, no-store, must-revalidate'}
+                })
                   .then(r => { if (!r.ok) throw new Error('http-'+r.status); return r.text(); })
                   .then(html => {
                       var parser = new DOMParser();
@@ -3154,9 +3193,42 @@ def maybe_refresh_next_tab(url: str, info: dict) -> bool:
                       var newSc = doc.querySelector('div.table-container.product-table-container');
                       if (!newSc) { callback({ok:false, err:'new-container-not-found'}); return; }
                       var y = window.scrollY;
-                      sc.innerHTML = newSc.innerHTML;
+                      
+                      // Smart differential update: only update changed tbody elements
+                      var oldTbodies = sc.querySelectorAll('tbody');
+                      var newTbodies = newSc.querySelectorAll('tbody');
+                      var updated = 0;
+                      
+                      // Update/add changed tbody elements
+                      for (var i = 0; i < newTbodies.length; i++) {
+                          var newTbody = newTbodies[i];
+                          var newId = newTbody.getAttribute('data-id') || newTbody.getAttribute('dataid') || '';
+                          var oldTbody = oldTbodies[i];
+                          
+                          if (!oldTbody) {
+                              // New tbody - append it
+                              sc.appendChild(newTbody.cloneNode(true));
+                              updated++;
+                          } else {
+                              var oldId = oldTbody.getAttribute('data-id') || oldTbody.getAttribute('dataid') || '';
+                              // Check if changed (by ID or content)
+                              if (oldId !== newId || oldTbody.innerHTML !== newTbody.innerHTML) {
+                                  oldTbody.replaceWith(newTbody.cloneNode(true));
+                                  updated++;
+                              }
+                          }
+                      }
+                      
+                      // Remove excess old tbody elements
+                      for (var i = newTbodies.length; i < oldTbodies.length; i++) {
+                          if (oldTbodies[i] && oldTbodies[i].parentNode) {
+                              oldTbodies[i].remove();
+                              updated++;
+                          }
+                      }
+                      
                       window.scrollTo(0, y);
-                      callback({ok:true});
+                      callback({ok:true, updated:updated, total:newTbodies.length});
                   })
                   .catch(e => callback({ok:false, err:String(e)}));
             } catch(e) { callback({ok:false, err:String(e)}); }
