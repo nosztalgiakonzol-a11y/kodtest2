@@ -540,205 +540,79 @@ def save_link_cache(cache: dict):
 PROFILE_DIR = ACTIVE_ACCOUNT["profile_dir"]
 os.makedirs(PROFILE_DIR, exist_ok=True)
 
-def create_chrome_options():
-    """Create a fresh ChromeOptions object with all necessary configuration."""
-    chrome_options = Options()
+chrome_options = Options()
 
-    if HEADLESS:
-        chrome_options.add_argument("--headless=new")
+if HEADLESS:
+    chrome_options.add_argument("--headless=new")
 
-    # 🔥 Minden account a saját fix profilkönyvtárát használja
-    chrome_options.add_argument(f"--user-data-dir={PROFILE_DIR}")
+# 🔥 Minden account a saját fix profilkönyvtárát használja
+chrome_options.add_argument(f"--user-data-dir={PROFILE_DIR}")
 
-    # (Opcionális) ha akarod mellé, maradhat az incognito is, de nem szükséges:
-    # chrome_options.add_argument("--incognito")
+# (Opcionális) ha akarod mellé, maradhat az incognito is, de nem szükséges:
+# chrome_options.add_argument("--incognito")
 
-    # Gyorsító / tiltó flag-ek
-    chrome_options.add_argument("--disable-features=OptimizationHints,TranslateUI")
-    chrome_options.add_argument("--disable-site-isolation-trials")
-    chrome_options.add_argument("--disable-translate")
-    chrome_options.add_argument("--disable-infobars")
-    chrome_options.add_argument("--disable-sync")
-    chrome_options.add_argument("--disable-client-side-phishing-detection")
-    # GPU disabled only in headless mode (see line 546)
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("--window-size=960,540")
-    chrome_options.add_argument("--disable-popup-blocking")
+# Gyorsító / tiltó flag-ek
+chrome_options.add_argument("--disable-features=OptimizationHints,TranslateUI")
+chrome_options.add_argument("--disable-site-isolation-trials")
+chrome_options.add_argument("--disable-translate")
+chrome_options.add_argument("--disable-infobars")
+chrome_options.add_argument("--disable-sync")
+chrome_options.add_argument("--disable-client-side-phishing-detection")
+# GPU disabled only in headless mode (see line 546)
+chrome_options.add_argument("--disable-dev-shm-usage")
+chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+chrome_options.add_argument("--window-size=960,540")
+chrome_options.add_argument("--disable-popup-blocking")
 
-    # Performance optimizations: reduce RAM usage and speed up page loads
-    chrome_options.add_argument("--blink-settings=imagesEnabled=false")  # Disable images
-    chrome_options.add_argument("--disable-remote-fonts")  # Disable remote fonts
-    chrome_options.add_argument("--disk-cache-size=50000000")  # 50MB disk cache
-    chrome_options.add_argument("--media-cache-size=50000000")  # 50MB media cache
+# Performance optimizations: reduce RAM usage and speed up page loads
+chrome_options.add_argument("--blink-settings=imagesEnabled=false")  # Disable images
+chrome_options.add_argument("--disable-remote-fonts")  # Disable remote fonts
+chrome_options.add_argument("--disk-cache-size=50000000")  # 50MB disk cache
+chrome_options.add_argument("--media-cache-size=50000000")  # 50MB media cache
 
-    chrome_options.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
-    )
+chrome_options.add_argument(
+    "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+)
 
-    # Prefs 1
-    prefs1 = {
-        "credentials_enable_service": False,
-        "profile.password_manager_enabled": False,
-        "profile.default_content_setting_values.notifications": 2,
-        "translate_whitelists": {"lt": "en"},
-        "translate": {"enabled": "true"},
-    }
-    chrome_options.add_experimental_option("prefs", prefs1)
+# Prefs 1
+prefs1 = {
+    "credentials_enable_service": False,
+    "profile.password_manager_enabled": False,
+    "profile.default_content_setting_values.notifications": 2,
+    "translate_whitelists": {"lt": "en"},
+    "translate": {"enabled": "true"},
+}
+chrome_options.add_experimental_option("prefs", prefs1)
 
-    # Performance optimizations: disable images, CSS, geolocation, etc.
-    prefs2 = {
-        "profile.default_content_setting_values.popups": 1,
-        "profile.managed_default_content_settings.images": 2,  # Disable images
-        "profile.managed_default_content_settings.stylesheet": 2,  # Disable CSS
-        "profile.managed_default_content_settings.geolocation": 2,
-        "profile.managed_default_content_settings.notifications": 2,
-        "profile.managed_default_content_settings.media_stream": 2,
-    }
-    chrome_options.add_experimental_option("prefs", prefs2)
+# Performance optimizations: disable images, CSS, geolocation, etc.
+prefs2 = {
+    "profile.default_content_setting_values.popups": 1,
+    "profile.managed_default_content_settings.images": 2,  # Disable images
+    "profile.managed_default_content_settings.stylesheet": 2,  # Disable CSS
+    "profile.managed_default_content_settings.geolocation": 2,
+    "profile.managed_default_content_settings.notifications": 2,
+    "profile.managed_default_content_settings.media_stream": 2,
+}
+chrome_options.add_experimental_option("prefs", prefs2)
 
-    # Logging
+# Logging
+try:
+    chrome_options.set_capability("pageLoadStrategy", "eager")
+    chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+except Exception:
+    pass
+
+# 🔥 Chrome indítása egyszer, tisztán
+try:
+    driver = uc.Chrome(options=chrome_options, version_main=143)
+except Exception as e:
+    print(f"First Chrome start attempt failed: {e}")
     try:
-        chrome_options.set_capability("pageLoadStrategy", "eager")
-        chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
-    except Exception:
-        pass
-    
-    return chrome_options
-
-
-def find_chrome_binary():
-    """Find Chrome binary path on Windows."""
-    possible_paths = [
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-        os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
-        os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe"),
-    ]
-    
-    for path in possible_paths:
-        if os.path.exists(path):
-            return path
-    return None
-
-
-def start_chrome_with_fallbacks():
-    """
-    Try multiple strategies to start Chrome with undetected-chromedriver.
-    Returns the driver instance or raises SystemExit.
-    """
-    print("🚀 Chrome indítása...")
-    
-    # Strategy 1: Default auto-detection
-    print("\n📍 Stratégia 1: Auto-detection...")
-    try:
-        driver = uc.Chrome(options=create_chrome_options())
-        print("✅ Chrome elindult sikeresen!")
-        return driver
-    except Exception as e1:
-        print(f"❌ Sikertelen: {str(e1)[:100]}")
-    
-    # Strategy 2: With explicit Chrome binary path
-    print("\n📍 Stratégia 2: Explicit Chrome binary path...")
-    try:
-        chrome_binary = find_chrome_binary()
-        if chrome_binary:
-            print(f"   Chrome talált: {chrome_binary}")
-            opts = create_chrome_options()
-            opts.binary_location = chrome_binary
-            driver = uc.Chrome(options=opts)
-            print("✅ Chrome elindult sikeresen!")
-            return driver
-        else:
-            print("   Chrome binary nem található a standard helyeken")
+        driver = uc.Chrome(options=chrome_options)
     except Exception as e2:
-        print(f"❌ Sikertelen: {str(e2)[:100]}")
-    
-    # Strategy 3: With use_subprocess=False (different process management)
-    print("\n📍 Stratégia 3: Alternatív process kezelés...")
-    try:
-        driver = uc.Chrome(options=create_chrome_options(), use_subprocess=False)
-        print("✅ Chrome elindult sikeresen!")
-        return driver
-    except Exception as e3:
-        print(f"❌ Sikertelen: {str(e3)[:100]}")
-    
-    # Strategy 4: Clear driver cache and retry
-    print("\n📍 Stratégia 4: Driver cache törlése és újra...")
-    try:
-        import glob
-        # Try to clear undetected-chromedriver cache
-        temp_dir = tempfile.gettempdir()
-        uc_pattern = os.path.join(temp_dir, "undetected_chromedriver*")
-        for item in glob.glob(uc_pattern):
-            try:
-                if os.path.isdir(item):
-                    shutil.rmtree(item)
-                else:
-                    os.remove(item)
-                print(f"   Törölve: {item}")
-            except:
-                pass
-        
-        driver = uc.Chrome(options=create_chrome_options())
-        print("✅ Chrome elindult sikeresen!")
-        return driver
-    except Exception as e4:
-        print(f"❌ Sikertelen: {str(e4)[:100]}")
-    
-    # Strategy 5: With headless=new and no prefs
-    print("\n📍 Stratégia 5: Minimal konfiguráció...")
-    try:
-        minimal_opts = Options()
-        minimal_opts.add_argument("--headless=new")
-        minimal_opts.add_argument("--no-sandbox")
-        minimal_opts.add_argument("--disable-dev-shm-usage")
-        driver = uc.Chrome(options=minimal_opts)
-        print("✅ Chrome elindult sikeresen!")
-        print("⚠️  FIGYELEM: Minimal konfigurációval fut (néhány funkció hiányozhat)")
-        return driver
-    except Exception as e5:
-        print(f"❌ Sikertelen: {str(e5)[:100]}")
-    
-    # All strategies failed
-    print("\n" + "="*60)
-    print("❌ HIBA: Chrome nem indult el egyetlen stratégiával sem!")
-    print("="*60)
-    print("\n🔧 Próbáld meg ezeket a lépéseket:")
-    print("\n1. CHROME ÚJRATELEPÍTÉSE:")
-    print("   - Távolítsd el a Chrome-ot: Vezérlőpult -> Programok")
-    print("   - Töröld a maradék fájlokat:")
-    print(f'     rmdir /S /Q "{os.path.expandvars("%LOCALAPPDATA%\\Google")}"')
-    print("   - Telepítsd újra: https://www.google.com/chrome/")
-    
-    print("\n2. PYTHON CSOMAGOK FRISSÍTÉSE:")
-    print("   pip uninstall undetected-chromedriver selenium -y")
-    print("   pip install undetected-chromedriver selenium")
-    
-    print("\n3. RENDSZER TISZTÍTÁS:")
-    print("   - Futtasd: taskkill /F /IM chrome.exe /T")
-    print("   - Futtasd: taskkill /F /IM chromedriver.exe /T")
-    print(f"   - Töröld: {tempfile.gettempdir()}\\undetected_chromedriver*")
-    
-    print("\n4. ANTIVIRUSZ/FIREWALL:")
-    print("   - Ideiglenesen kapcsold ki az antiviruszt")
-    print("   - Add hozzá a Python.exe-t a kivételekhez")
-    
-    print("\n5. CHROME VERZIÓ ELLENŐRZÉS:")
-    chrome_binary = find_chrome_binary()
-    if chrome_binary:
-        print(f"   Chrome található: {chrome_binary}")
-        print("   Nyisd meg a Chrome-ot és nézd meg: chrome://version")
-    else:
-        print("   ❌ Chrome binary nem található!")
-    
-    raise SystemExit(1)
-
-
-# 🔥 Chrome indítása többszörös fallback-kel
-driver = start_chrome_with_fallbacks()
+        print(f"❌ Chrome start FAILED: {e2}")
+        raise SystemExit(1)
 
 uc.Chrome.__del__ = lambda self: None
 
