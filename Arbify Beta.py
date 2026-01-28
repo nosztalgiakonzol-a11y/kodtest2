@@ -162,7 +162,7 @@ RESOLVE_POLL_INTERVAL = 0
 HANDLE_WAIT_TIMEOUT = 0.5
 HEADLESS = False
 
-FIX_URL_WAIT_SEC = 18.5
+FIX_URL_WAIT_SEC = 17
 NAV_HARD_LIMIT_SEC = 20.0
 
 NAV_DEBUG_INTERVAL = 2.0  # másodpercenkénti NAV debug log (0 = kikapcsolva)
@@ -174,7 +174,7 @@ TAB_CLEANUP_MIN_AGE = 70.0     # ennél fiatalabb ismeretlen tabot nem zárunk b
 NAV_WORKER_MAX_PAIRS = 11
 
 # Egy párra mennyi ideig várunk maximum (másodpercben)
-PAIR_TIMEOUT_SEC = FIX_URL_WAIT_SEC  # 18.5 mp - optimalizált timeout
+PAIR_TIMEOUT_SEC = FIX_URL_WAIT_SEC  # 17 mp - optimalizált timeout
 
 # Milyen gyakran kérdezzük le CDP-vel a Target.getTargets-et (másodperc)
 CDP_POLL_INTERVAL = 0.40  # 400 ms - optimalizált polling rate
@@ -2261,6 +2261,26 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
 
                 if LOG_PAIR_DONE:
                     log(f"[RR] ✓ Pár kész (idx={pair_idx}) f1={f1} f2={f2}")
+
+        # Instant timeout check: ha nincs külső 'page' target, ne várjunk tovább
+        has_external_targets = False
+        for t in targets:
+            if t.get("type") != "page":
+                continue
+            url = t.get("url") or ""
+            if not url.startswith("http"):
+                continue
+            try:
+                host = urlparse(url).netloc.lower()
+                if "surebet.com" not in host:
+                    has_external_targets = True
+                    break
+            except Exception:
+                pass
+        
+        if not has_external_targets and tracking:
+            log("[RR] ⚡ Nincs külső 'page' target → instant timeout")
+            break
 
         # debug log 2 mp-enként (ha engedélyezve)
         if NAV_DEBUG_INTERVAL > 0 and (time.time() - last_dbg) >= NAV_DEBUG_INTERVAL:
