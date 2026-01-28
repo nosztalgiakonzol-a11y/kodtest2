@@ -3092,12 +3092,19 @@ def open_next_tab_if_needed(next_url):
         original = driver.current_window_handle
     except Exception:
         original = None
+    
+    # Store MAIN_HANDLE for validation after opening
+    main_to_check = MAIN_HANDLE
 
     try:
         driver.switch_to.new_window('tab')
         driver.get(next_url)
         _inject_disable_animations()
         handle = driver.current_window_handle
+        
+        # Check if MAIN_HANDLE was lost during tab opening
+        if main_to_check and main_to_check not in driver.window_handles:
+            warn(f"⚠️ MAIN_HANDLE lost during NEXT tab opening")
 
         WebDriverWait(driver, 8).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "div.table-container.product-table-container"))
@@ -3391,6 +3398,9 @@ def _open_next_tab_sync(next_url: str):
     # Extra safety: check if original handle still exists
     if original and original not in driver.window_handles:
         original = None
+    
+    # Store MAIN_HANDLE for validation after opening
+    main_to_check = MAIN_HANDLE
 
     try:
         driver.switch_to.new_window('tab')
@@ -3398,6 +3408,10 @@ def _open_next_tab_sync(next_url: str):
         _inject_disable_animations()
         handle = driver.current_window_handle
         handle_birth[handle] = time.time()
+        
+        # Check if MAIN_HANDLE was lost during tab opening
+        if main_to_check and main_to_check not in driver.window_handles:
+            warn(f"⚠️ MAIN_HANDLE lost during NEXT tab opening (sync)")
 
         WebDriverWait(driver, 8).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "div.table-container.product-table-container"))
@@ -4624,6 +4638,14 @@ def run_dynamic_bootstrap():
         try:
             if MAIN_HANDLE and MAIN_HANDLE in driver.window_handles:
                 driver.switch_to.window(MAIN_HANDLE)
+                # Verify MAIN is not about:blank (fix for bootstrap issue)
+                current_url = driver.current_url
+                if current_url == "about:blank" or not is_surebet_url(current_url):
+                    warn(f"⚠️ MAIN_HANDLE points to invalid page ({current_url}), reloading MAIN...")
+                    driver.get(MAIN_URL)
+                    _inject_disable_animations()
+                    _wait_main_container(timeout=12)
+                
                 next_link = find_next_page_link()
                 if next_link and next_link not in next_tabs:
                     next_urls_to_open.append(next_link)
@@ -4671,6 +4693,14 @@ def run_dynamic_bootstrap():
         try:
             if MAIN_HANDLE and MAIN_HANDLE in driver.window_handles:
                 driver.switch_to.window(MAIN_HANDLE)
+                # Verify MAIN is not about:blank
+                current_url = driver.current_url
+                if current_url == "about:blank" or not is_surebet_url(current_url):
+                    warn(f"⚠️ MAIN_HANDLE invalid during GROUP collection ({current_url}), reloading...")
+                    driver.get(MAIN_URL)
+                    _inject_disable_animations()
+                    _wait_main_container(timeout=12)
+                
                 tbodys = driver.find_elements(By.CSS_SELECTOR, "tbody.surebet_record")
                 for tbody in tbodys:
                     try:
@@ -5036,6 +5066,16 @@ if __name__ == "__main__":
                     _wait_main_container(timeout=12)
                     ensure_main_autoupdate()
                     time.sleep(3)
+                elif MAIN_HANDLE in driver.window_handles:
+                    # Validate MAIN is not about:blank (fix for bootstrap issue)
+                    driver.switch_to.window(MAIN_HANDLE)
+                    current_url = driver.current_url
+                    if current_url == "about:blank" or not is_surebet_url(current_url):
+                        log(f"⚠️ MAIN_HANDLE is invalid ({current_url}), reloading MAIN page...")
+                        driver.get(MAIN_URL)
+                        _inject_disable_animations()
+                        _wait_main_container(timeout=12)
+                        ensure_main_autoupdate()
 
                 # biztosan MAIN-en vagyunk
                 driver.switch_to.window(MAIN_HANDLE)
