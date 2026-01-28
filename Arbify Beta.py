@@ -5099,21 +5099,25 @@ if __name__ == "__main__":
             # --- MAIN tab életben tartása + újranyitása, ha kell ---
             try:
                 # Ha nincs MAIN_HANDLE, vagy a handle már nincs a window_handles-ben → újranyitjuk
+                # CSAK bootstrap után! Különben duplikált MAIN page-eket nyithatunk.
                 if not MAIN_HANDLE or MAIN_HANDLE not in driver.window_handles:
-                    log("⚠️ MAIN_HANDLE eltűnt, új főoldalt nyitok...")
+                    if BOOTSTRAP_COMPLETED:
+                        log("⚠️ MAIN_HANDLE eltűnt, új főoldalt nyitok...")
 
-                    # új tab + MAIN_URL betöltése
-                    driver.switch_to.new_window("tab")
-                    driver.get(MAIN_URL)
-                    MAIN_HANDLE = driver.current_window_handle
-                    handle_birth[MAIN_HANDLE] = time.time()
+                        # új tab + MAIN_URL betöltése
+                        driver.switch_to.new_window("tab")
+                        driver.get(MAIN_URL)
+                        MAIN_HANDLE = driver.current_window_handle
+                        handle_birth[MAIN_HANDLE] = time.time()
 
-                    _inject_disable_animations()
-                    _wait_main_container(timeout=12)
-                    ensure_main_autoupdate()
-                    time.sleep(3)
-                elif MAIN_HANDLE in driver.window_handles:
-                    # Validate MAIN is not about:blank (fix for bootstrap issue)
+                        _inject_disable_animations()
+                        _wait_main_container(timeout=12)
+                        ensure_main_autoupdate()
+                        time.sleep(3)
+                    else:
+                        log("⚠️ MAIN_HANDLE missing but bootstrap not complete yet, skipping recovery...")
+                elif BOOTSTRAP_COMPLETED and MAIN_HANDLE in driver.window_handles:
+                    # Validate MAIN is not about:blank (only after bootstrap)
                     driver.switch_to.window(MAIN_HANDLE)
                     current_url = driver.current_url
                     if current_url == "about:blank" or not is_surebet_url(current_url):
@@ -5123,11 +5127,12 @@ if __name__ == "__main__":
                         _wait_main_container(timeout=12)
                         ensure_main_autoupdate()
 
-                # biztosan MAIN-en vagyunk
-                driver.switch_to.window(MAIN_HANDLE)
+                # biztosan MAIN-en vagyunk (only if MAIN_HANDLE is valid)
+                if MAIN_HANDLE and MAIN_HANDLE in driver.window_handles:
+                    driver.switch_to.window(MAIN_HANDLE)
                 
-                # --- MAIN page health monitoring ---
-                if now_ts - MAIN_LAST_HEALTH_CHECK >= MAIN_HEALTH_CHECK_INTERVAL:
+                # --- MAIN page health monitoring (only after bootstrap) ---
+                if BOOTSTRAP_COMPLETED and now_ts - MAIN_LAST_HEALTH_CHECK >= MAIN_HEALTH_CHECK_INTERVAL:
                     MAIN_LAST_HEALTH_CHECK = now_ts
                     
                     healthy, reason = check_main_page_health()
