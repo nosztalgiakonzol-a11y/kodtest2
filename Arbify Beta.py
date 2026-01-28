@@ -78,6 +78,8 @@ def _safe_window_handles(label: str):
         if _is_driver_connection_error(e):
             DRIVER_DEAD = True
             warn(f"[win_handles] driver leállt (WebDriverException): {msg} (label={label})")
+            warn("🔄 Driver connection lost, restarting application...")
+            restart_application()
             return []
         warn(f"[win_handles] hiba: {msg} (label={label})")
         return []
@@ -86,6 +88,8 @@ def _safe_window_handles(label: str):
         if _is_driver_connection_error(e):
             DRIVER_DEAD = True
             warn(f"[win_handles] driver leállt (Exception): {msg} (label={label})")
+            warn("🔄 Driver connection lost, restarting application...")
+            restart_application()
             return []
         warn(f"[win_handles] váratlan hiba: {msg} (label={label})")
         return []
@@ -5195,6 +5199,11 @@ if __name__ == "__main__":
         else:
             warn(f"⚠️ WebDriverException in main loop (not restarting): {e}")
             DIAG_LOGGER.log_event("ERROR", f"WebDriverException (not critical): {str(e)[:150]}", "WARN")
+    except Exception as e:
+        # Catch-all for any unhandled exceptions
+        warn(f"❌ UNHANDLED CRASH: {type(e).__name__}: {e}")
+        DIAG_LOGGER.log_crash_context(e, "UNHANDLED_EXCEPTION")
+        restart_application()
     finally:
         try:
             flush_pending_updates()
