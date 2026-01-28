@@ -202,6 +202,12 @@ BOOTSTRAP_SEC = 50.0        # legacy, not used in dynamic mode
 BOOTSTRAP_CLEANUP_DONE = False  # jelzi, hogy a post-bootstrap cleanup már lefutott-e
 BOOTSTRAP_COMPLETED = False      # jelzi, hogy a dinamikus bootstrap befejeződött
 
+# --- MAIN PAGE HEALTH MONITORING ---
+MAIN_LAST_HEALTH_CHECK = 0.0
+MAIN_HEALTH_CHECK_INTERVAL = 30  # Check every 30 seconds
+MAIN_CONSECUTIVE_FAILURES = 0
+MAIN_MAX_FAILURES_BEFORE_RESTART = 3
+
 def in_bootstrap_phase() -> bool:
     """
     True: amíg a dinamikus bootstrap fut (BOOTSTRAP_COMPLETED == False).
@@ -4857,6 +4863,46 @@ def save_cumulative_runtime(runtime_seconds):
     except Exception as e:
         warn(f"⚠️ Failed to save cumulative runtime: {e}")
 
+def check_main_page_health():
+    """
+    Check if MAIN page is healthy and responsive.
+    Returns: (healthy: bool, reason: str)
+    """
+    global MAIN_HANDLE
+    
+    if not MAIN_HANDLE or MAIN_HANDLE not in driver.window_handles:
+        return False, "MAIN_HANDLE missing"
+    
+    try:
+        # Switch to MAIN
+        driver.switch_to.window(MAIN_HANDLE)
+        
+        # Check URL
+        current_url = driver.current_url
+        if current_url == "about:blank" or not is_surebet_url(current_url):
+            return False, f"Invalid URL: {current_url}"
+        
+        # Try to find table container (basic responsiveness check)
+        try:
+            containers = driver.find_elements(By.CSS_SELECTOR, "div.table-container")
+            if not containers:
+                return False, "No table container found"
+        except Exception as e:
+            return False, f"Element lookup failed: {str(e)[:50]}"
+        
+        # Check if page is frozen (execute simple JS)
+        try:
+            result = driver.execute_script("return document.readyState")
+            if result != "complete":
+                return False, f"Page not complete: {result}"
+        except Exception as e:
+            return False, f"JS execution failed: {str(e)[:50]}"
+        
+        return True, "OK"
+        
+    except Exception as e:
+        return False, f"Health check exception: {str(e)[:50]}"
+
 def reset_cumulative_runtime():
     """Reset cumulative runtime to 0 (after account switch)."""
     save_cumulative_runtime(0.0)
@@ -5079,6 +5125,25 @@ if __name__ == "__main__":
 
                 # biztosan MAIN-en vagyunk
                 driver.switch_to.window(MAIN_HANDLE)
+                
+                # --- MAIN page health monitoring ---
+                if now_ts - MAIN_LAST_HEALTH_CHECK >= MAIN_HEALTH_CHECK_INTERVAL:
+                    MAIN_LAST_HEALTH_CHECK = now_ts
+                    
+                    healthy, reason = check_main_page_health()
+                    if not healthy:
+                        MAIN_CONSECUTIVE_FAILURES += 1
+                        warn(f"⚠️ MAIN page health check failed ({MAIN_CONSECUTIVE_FAILURES}/{MAIN_MAX_FAILURES_BEFORE_RESTART}): {reason}")
+                        
+                        if MAIN_CONSECUTIVE_FAILURES >= MAIN_MAX_FAILURES_BEFORE_RESTART:
+                            warn(f"❌ MAIN page unhealthy after {MAIN_CONSECUTIVE_FAILURES} checks, triggering restart...")
+                            DIAG_LOGGER.log_crash_context(Exception(f"MAIN unhealthy: {reason}"), "MAIN_UNHEALTHY")
+                            restart_application()
+                    else:
+                        # Reset counter on success
+                        if MAIN_CONSECUTIVE_FAILURES > 0:
+                            log(f"✅ MAIN page health recovered after {MAIN_CONSECUTIVE_FAILURES} failures")
+                        MAIN_CONSECUTIVE_FAILURES = 0
 
                 # időnként pici keepalive mozgás, hogy ne haljon el a tab
                 if now_ts - last_keepalive_ping_ts >= 90:
