@@ -197,6 +197,7 @@ NAV_STABLE_AFTER_EXIT = 0.42 # ha kimentünk NAV-ról, ennyit várunk stabilan
 
 # --- BOOTSTRAP FÁZIS: indulás után X másodpercig csak tabnyitás + ID-gyűjtés ---
 RUN_STARTED_AT = 0.0        # induláskor beállítjuk __main__-ben
+CUMULATIVE_RUNTIME_AT_START = 0.0  # Loaded from file on startup - persistent across restarts
 BOOTSTRAP_SEC = 50.0        # legacy, not used in dynamic mode
 BOOTSTRAP_CLEANUP_DONE = False  # jelzi, hogy a post-bootstrap cleanup már lefutott-e
 BOOTSTRAP_COMPLETED = False      # jelzi, hogy a dinamikus bootstrap befejeződött
@@ -4799,8 +4800,43 @@ def get_next_account_key(current: str) -> str:
     return "acc1"
 
 
+# --- Persistent cumulative runtime tracking for account rotation ---
+ACCOUNT_RUNTIME_FILE = "account_runtime.json"
+
+def load_cumulative_runtime():
+    """Load cumulative runtime from persistent file."""
+    try:
+        if os.path.exists(ACCOUNT_RUNTIME_FILE):
+            with open(ACCOUNT_RUNTIME_FILE, 'r') as f:
+                data = json.load(f)
+                return data.get("cumulative_runtime_seconds", 0.0)
+    except Exception as e:
+        warn(f"⚠️ Failed to load cumulative runtime: {e}")
+    return 0.0
+
+def save_cumulative_runtime(runtime_seconds):
+    """Save cumulative runtime to persistent file."""
+    try:
+        data = {
+            "account": ACTIVE_ACCOUNT_KEY,
+            "cumulative_runtime_seconds": runtime_seconds,
+            "last_update": time.time()
+        }
+        with open(ACCOUNT_RUNTIME_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        warn(f"⚠️ Failed to save cumulative runtime: {e}")
+
+def reset_cumulative_runtime():
+    """Reset cumulative runtime to 0 (after account switch)."""
+    save_cumulative_runtime(0.0)
+
+
 def restart_with_account(next_key: str):
     warn(f"♻️ Account váltás: {ACTIVE_ACCOUNT_KEY} → {next_key} – Chrome + script újraindítás...")
+    
+    # Reset cumulative runtime counter after account switch
+    reset_cumulative_runtime()
 
     # Itt MOST NEM hívunk TAB-RESYNC-et.
     # A folyamatos futás alatt a DISAPPEAR_GRACE_SEC alapú törlés már szépen
@@ -4844,6 +4880,9 @@ CONSECUTIVE_SAVE_FAIL_THRESHOLD = 55
 # NOTE: A futtatáskor a login() hívás indít. Ha csak importálod, ne fusson automatikusan.
 if __name__ == "__main__":
     RUN_STARTED_AT = time.time()
+    CUMULATIVE_RUNTIME_AT_START = load_cumulative_runtime()
+    if CUMULATIVE_RUNTIME_AT_START > 0:
+        log(f"📊 Cumulative runtime loaded: {CUMULATIVE_RUNTIME_AT_START/60:.1f} minutes (persistent across restarts)")
     login()
 
     log("🚀 DINAMIKUS BOOTSTRAP fázis: rekurzív MAIN + NEXT + GROUP oldalak megnyitása")
@@ -5194,11 +5233,19 @@ if __name__ == "__main__":
 
             # ✅ ACCOUNT ROTÁCIÓ: ha letelt X perc, váltunk acc1 <-> acc2
             if ACCOUNT_ROTATE_MIN > 0:
-                elapsed_min = (time.time() - RUN_STARTED_AT) / 60.0
+                # Calculate total runtime = previous sessions + current session
+                current_session_runtime = time.time() - RUN_STARTED_AT
+                total_runtime_seconds = CUMULATIVE_RUNTIME_AT_START + current_session_runtime
+                elapsed_min = total_runtime_seconds / 60.0
+                
                 if elapsed_min >= ACCOUNT_ROTATE_MIN:
                     next_key = get_next_account_key(ACTIVE_ACCOUNT_KEY)
-                    log(f"♻️ {ACCOUNT_ROTATE_MIN:.1f} perc letelt, váltás {ACTIVE_ACCOUNT_KEY} → {next_key}")
+                    log(f"♻️ {elapsed_min:.1f} perc eltelt (cumulative), váltás {ACTIVE_ACCOUNT_KEY} → {next_key}")
                     restart_with_account(next_key)
+                
+                # Periodically save cumulative runtime (every ~100 iterations)
+                if loop_iter % 100 == 0:
+                    save_cumulative_runtime(total_runtime_seconds)
 
             # 🔴 NAV worker indítása – CSAK BOOTSTRAP UTÁN
             if not nav_started and not bootstrap:
