@@ -4166,13 +4166,14 @@ _pending_update_buffer = []  # UPDATE payloadok
 _pending_delete_buffer = []  # DELETE ID-k
 
 def process_dispatcher_results(max_items=300):
-    global active_ids, seen
+    global active_ids, seen, consecutive_save_failures
     results = dispatcher.get_results(max_items=max_items)
     for res in results:
         rtype = res.get("type")
         tid = res.get("id")
 
         if rtype in ("save_ok", "save_dup_updated"):
+            consecutive_save_failures = 0  # Reset counter on successful save
             st = res.get("state_info", {})
             resp = res.get("resp", {})
             cid = resp.get("correlation_id")
@@ -4195,12 +4196,24 @@ def process_dispatcher_results(max_items=300):
             log(f"ℹ️ SAVE duplicate (külön UPDATE nem futott automatikusan): {tid} cid={cid}")
 
         elif rtype == "save_dup_update_fail":
-            warn(f"⚠️ SAVE duplicate → UPDATE FAIL id={tid} status={res.get('status')} err={res.get('error')}")
+            consecutive_save_failures += 1
+            warn(f"⚠️ SAVE duplicate → UPDATE FAIL id={tid} status={res.get('status')} err={res.get('error')} (consecutive failures: {consecutive_save_failures})")
+            
+            if consecutive_save_failures >= CONSECUTIVE_SAVE_FAIL_THRESHOLD:
+                warn(f"❌ {consecutive_save_failures} consecutive save failures → triggering account switch")
+                next_key = get_next_account_key(ACTIVE_ACCOUNT_KEY)
+                restart_with_account(next_key)
 
         elif rtype == "save_error":
+            consecutive_save_failures += 1
             err = res.get("error")
             cid = (err or {}).get("correlation_id") if isinstance(err, dict) else None
-            warn(f"⚠️ SAVE hiba id={tid} status={res.get('status')} err={err} cid={cid}")
+            warn(f"⚠️ SAVE hiba id={tid} status={res.get('status')} err={err} cid={cid} (consecutive failures: {consecutive_save_failures})")
+            
+            if consecutive_save_failures >= CONSECUTIVE_SAVE_FAIL_THRESHOLD:
+                warn(f"❌ {consecutive_save_failures} consecutive save failures → triggering account switch")
+                next_key = get_next_account_key(ACTIVE_ACCOUNT_KEY)
+                restart_with_account(next_key)
 
         elif rtype == "update_ok":
             p = res.get("payload", {})
@@ -4824,6 +4837,10 @@ last_update_ts = {}
 last_update_attempt_ts = {}
 link_cache = load_link_cache()
 
+# Consecutive save failure tracking for account switching
+consecutive_save_failures = 0
+CONSECUTIVE_SAVE_FAIL_THRESHOLD = 55
+
 # NOTE: A futtatáskor a login() hívás indít. Ha csak importálod, ne fusson automatikusan.
 if __name__ == "__main__":
     RUN_STARTED_AT = time.time()
@@ -5021,6 +5038,16 @@ if __name__ == "__main__":
                     if not tbody_id:
                         continue
 
+                    # Check for "surebet.com" text in tbody (case-insensitive) → trigger account switch
+                    try:
+                        tbody_text = tbody.text.lower()
+                        if "surebet.com" in tbody_text:
+                            warn(f"⚠️ 'surebet.com' text detected in tbody {tbody_id} → triggering account switch")
+                            next_key = get_next_account_key(ACTIVE_ACCOUNT_KEY)
+                            restart_with_account(next_key)
+                    except Exception as e:
+                        pass  # Ignore text extraction errors
+
                     curr_ids_main.add(tbody_id)
                     last_seen_ts[tbody_id] = now_ts
                     id_source[tbody_id] = 'main'
@@ -5046,12 +5073,23 @@ if __name__ == "__main__":
                     if not tbody_id:
                         continue
                     
+                    # Check for "surebet.com" text in tbody (case-insensitive) → trigger account switch
+                    tbody_elem = item.get('element')
+                    if tbody_elem:
+                        try:
+                            tbody_text = tbody_elem.text.lower()
+                            if "surebet.com" in tbody_text:
+                                warn(f"⚠️ 'surebet.com' text detected in tbody {tbody_id} → triggering account switch")
+                                next_key = get_next_account_key(ACTIVE_ACCOUNT_KEY)
+                                restart_with_account(next_key)
+                        except Exception:
+                            pass  # Ignore text extraction errors
+                    
                     curr_ids_main.add(tbody_id)
                     last_seen_ts[tbody_id] = now_ts
                     id_source[tbody_id] = 'main'
 
                     # GROUP linkek - still need element reference
-                    tbody_elem = item.get('element')
                     if tbody_elem:
                         try:
                             group_url = find_group_link_in_tbody(tbody_elem)
