@@ -78,6 +78,8 @@ def _safe_window_handles(label: str):
         if _is_driver_connection_error(e):
             DRIVER_DEAD = True
             warn(f"[win_handles] driver leállt (WebDriverException): {msg} (label={label})")
+            warn("🔄 Driver connection lost, restarting application...")
+            restart_application()
             return []
         warn(f"[win_handles] hiba: {msg} (label={label})")
         return []
@@ -86,6 +88,8 @@ def _safe_window_handles(label: str):
         if _is_driver_connection_error(e):
             DRIVER_DEAD = True
             warn(f"[win_handles] driver leállt (Exception): {msg} (label={label})")
+            warn("🔄 Driver connection lost, restarting application...")
+            restart_application()
             return []
         warn(f"[win_handles] váratlan hiba: {msg} (label={label})")
         return []
@@ -162,7 +166,7 @@ RESOLVE_POLL_INTERVAL = 0
 HANDLE_WAIT_TIMEOUT = 0.5
 HEADLESS = False
 
-FIX_URL_WAIT_SEC = 20
+FIX_URL_WAIT_SEC = 17
 NAV_HARD_LIMIT_SEC = 20.0
 
 NAV_DEBUG_INTERVAL = 2.0  # másodpercenkénti NAV debug log (0 = kikapcsolva)
@@ -174,10 +178,10 @@ TAB_CLEANUP_MIN_AGE = 70.0     # ennél fiatalabb ismeretlen tabot nem zárunk b
 NAV_WORKER_MAX_PAIRS = 11
 
 # Egy párra mennyi ideig várunk maximum (másodpercben)
-PAIR_TIMEOUT_SEC = FIX_URL_WAIT_SEC  # most 20 mp, ugyanaz mint a régi FIX_URL_WAIT_SEC
+PAIR_TIMEOUT_SEC = FIX_URL_WAIT_SEC  # 17 mp - optimalizált timeout
 
 # Milyen gyakran kérdezzük le CDP-vel a Target.getTargets-et (másodperc)
-CDP_POLL_INTERVAL = 0.20  # 200 ms - csökkenti CPU terhelést és CDP spam-et
+CDP_POLL_INTERVAL = 0.40  # 400 ms - optimalizált polling rate
 
 # Logoljuk-e, ha egy pár mindkét végső linkje megvan és a pár lezárult
 LOG_PAIR_DONE = True
@@ -193,9 +197,16 @@ NAV_STABLE_AFTER_EXIT = 0.42 # ha kimentünk NAV-ról, ennyit várunk stabilan
 
 # --- BOOTSTRAP FÁZIS: indulás után X másodpercig csak tabnyitás + ID-gyűjtés ---
 RUN_STARTED_AT = 0.0        # induláskor beállítjuk __main__-ben
+CUMULATIVE_RUNTIME_AT_START = 0.0  # Loaded from file on startup - persistent across restarts
 BOOTSTRAP_SEC = 50.0        # legacy, not used in dynamic mode
 BOOTSTRAP_CLEANUP_DONE = False  # jelzi, hogy a post-bootstrap cleanup már lefutott-e
 BOOTSTRAP_COMPLETED = False      # jelzi, hogy a dinamikus bootstrap befejeződött
+
+# --- MAIN PAGE HEALTH MONITORING ---
+MAIN_LAST_HEALTH_CHECK = 0.0
+MAIN_HEALTH_CHECK_INTERVAL = 30  # Check every 30 seconds
+MAIN_CONSECUTIVE_FAILURES = 0
+MAIN_MAX_FAILURES_BEFORE_RESTART = 3
 
 def in_bootstrap_phase() -> bool:
     """
@@ -558,11 +569,18 @@ chrome_options.add_argument("--disable-translate")
 chrome_options.add_argument("--disable-infobars")
 chrome_options.add_argument("--disable-sync")
 chrome_options.add_argument("--disable-client-side-phishing-detection")
-chrome_options.add_argument("--disable-gpu")
+# GPU disabled only in headless mode (see line 546)
 chrome_options.add_argument("--disable-dev-shm-usage")
 chrome_options.add_argument("--disable-blink-features=AutomationControlled")
 chrome_options.add_argument("--window-size=960,540")
 chrome_options.add_argument("--disable-popup-blocking")
+
+# Performance optimizations: reduce RAM usage and speed up page loads
+chrome_options.add_argument("--blink-settings=imagesEnabled=false")  # Disable images
+chrome_options.add_argument("--disable-remote-fonts")  # Disable remote fonts
+chrome_options.add_argument("--disk-cache-size=50000000")  # 50MB disk cache
+chrome_options.add_argument("--media-cache-size=50000000")  # 50MB media cache
+
 chrome_options.add_argument(
     "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
@@ -578,10 +596,11 @@ prefs1 = {
 }
 chrome_options.add_experimental_option("prefs", prefs1)
 
-# Kép / geolocation / camera tiltás
+# Performance optimizations: disable images, CSS, geolocation, etc.
 prefs2 = {
     "profile.default_content_setting_values.popups": 1,
-    "profile.managed_default_content_settings.images": 2,
+    "profile.managed_default_content_settings.images": 2,  # Disable images
+    "profile.managed_default_content_settings.stylesheet": 2,  # Disable CSS
     "profile.managed_default_content_settings.geolocation": 2,
     "profile.managed_default_content_settings.notifications": 2,
     "profile.managed_default_content_settings.media_stream": 2,
@@ -896,7 +915,7 @@ def restart_application():
     
     # Restart script
     warn("🔄 Restarting script...")
-    os.execv(sys.executable, ['python'] + sys.argv)
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 # ---------- URL utilok ----------
@@ -1716,8 +1735,15 @@ OPEN_TASKS_MAX = 5000
 
 def enqueue_open_task(task: dict):
     """Feladat (tbody-id) nyitásának előkészítése lookahead-dal.
-       Csak akkor tesszük be, ha még nincs link-final megoldva azonnal."""
+       Csak akkor tesszük be, ha még nincs link-final megoldva azonnal.
+       Duplikáció ellenőrzéssel - ugyanaz az ID csak egyszer lehet a queue-ban."""
     try:
+        tbody_id = task.get("id")
+        
+        # Deduplication check: skip if already in queue
+        if any(t.get("id") == tbody_id for t in OPEN_TASKS):
+            return  # Already queued, skip
+        
         if len(OPEN_TASKS) < OPEN_TASKS_MAX:
             OPEN_TASKS.append(task)
         else:
@@ -1726,6 +1752,30 @@ def enqueue_open_task(task: dict):
             OPEN_TASKS.append(task)
     except Exception as e:
         warn(f"⚠️ enqueue_open_task hiba: {e}")
+
+def remove_gone_ids_from_open_tasks(gone_ids: set):
+    """
+    Eltűnt tbody ID-ket eltávolítja az OPEN_TASKS sorból.
+    Ezzel elkerüljük, hogy feleslegesen nyissunk meg linkeket már nem létező elemekhez.
+    
+    Args:
+        gone_ids: Eltűnt tbody ID-k halmaza
+    """
+    if not gone_ids or not OPEN_TASKS:
+        return
+    
+    try:
+        # Végigmegyünk az OPEN_TASKS soron és csak azokat tartjuk meg, amik nincsenek a gone_ids-ben
+        original_len = len(OPEN_TASKS)
+        filtered_tasks = deque([task for task in OPEN_TASKS if task.get("id") not in gone_ids])
+        
+        removed_count = original_len - len(filtered_tasks)
+        if removed_count > 0:
+            OPEN_TASKS.clear()
+            OPEN_TASKS.extend(filtered_tasks)
+            log(f"🧹 OPEN_TASKS tisztítás: {removed_count} eltűnt elem eltávolítva (maradt: {len(OPEN_TASKS)})")
+    except Exception as e:
+        warn(f"⚠️ remove_gone_ids_from_open_tasks hiba: {e}")
 
 # ---------- stale-biztos DOM snapshot ----------
 def dom_snapshot_by_id(tbody_id: str, attempts=4, sleep=0.08):
@@ -1991,8 +2041,8 @@ def _schedule_nav_backoff(tid: str):
     nav_backoff_consecutive += 1
     warn(f"⏳ NAV backoff id={tid} {int(delay)}s (attempt={att})")
 
-    if nav_backoff_consecutive >= 10:
-        force_main_refresh("10 consecutive NAV backoffs")
+    if nav_backoff_consecutive >= 15:
+        force_main_refresh("15 consecutive NAV backoffs")
         nav_backoff_consecutive = 0
 
 def _clear_nav_backoff(tid: str):
@@ -2101,12 +2151,21 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
     except Exception:
         handles_before = set()
 
-    # 1) Targetek létrehozása (CDP-safe)
+    # 1) Targetek létrehozása (CDP-safe + window handle validation)
     for idx, p in enumerate(norm):
         if p is None:
             continue
         href1, href2 = p
         created_any = False
+
+        # Optimization #1: Window handle validation before CDP operations
+        try:
+            if not driver.window_handles:
+                warn(f"[RR] Nincs window handle idx={idx} előtt, skip target creation")
+                continue
+        except Exception:
+            warn(f"[RR] Window handle validation hiba idx={idx}, skip target creation")
+            continue
 
         # első oldal
         res1 = _safe_cdp_cmd(
@@ -2180,7 +2239,11 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
 
             if done_pairs[pair_idx]:
                 # ezt a párt már lezártuk; a maradék targetet is bezárhatjuk
-                _safe_cdp_cmd("Target.closeTarget", {"targetId": tid}, label="RR closeTarget (pair already done)")
+                # Optimization #3: Robust CDP cleanup with try-except
+                try:
+                    _safe_cdp_cmd("Target.closeTarget", {"targetId": tid}, label="RR closeTarget (pair already done)")
+                except Exception:
+                    pass  # Silent fail ha már bezárva vagy hiba van
                 tracking.pop(tid, None)
                 continue
 
@@ -2200,11 +2263,35 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
                 # csukjuk be a párhoz tartozó összes targetet
                 to_close = [tid2 for tid2, info2 in tracking.items() if info2["pair"] == pair_idx]
                 for tid2 in to_close:
-                    _safe_cdp_cmd("Target.closeTarget", {"targetId": tid2}, label="RR closeTarget (pair done)")
+                    # Optimization #3: Robust CDP cleanup with try-except
+                    try:
+                        _safe_cdp_cmd("Target.closeTarget", {"targetId": tid2}, label="RR closeTarget (pair done)")
+                    except Exception:
+                        pass  # Silent fail ha már bezárva vagy hiba van
                     tracking.pop(tid2, None)
 
                 if LOG_PAIR_DONE:
                     log(f"[RR] ✓ Pár kész (idx={pair_idx}) f1={f1} f2={f2}")
+
+        # Instant timeout check: ha nincs külső 'page' target, ne várjunk tovább
+        has_external_targets = False
+        for t in targets:
+            if t.get("type") != "page":
+                continue
+            url = t.get("url") or ""
+            if not url.startswith("http"):
+                continue
+            try:
+                host = urlparse(url).netloc.lower()
+                if "surebet.com" not in host:
+                    has_external_targets = True
+                    break
+            except Exception:
+                pass
+        
+        if not has_external_targets and tracking:
+            log("[RR] ⚡ Nincs külső 'page' target → instant timeout")
+            break
 
         # debug log 2 mp-enként (ha engedélyezve)
         if NAV_DEBUG_INTERVAL > 0 and (time.time() - last_dbg) >= NAV_DEBUG_INTERVAL:
@@ -2213,10 +2300,14 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
 
         time.sleep(CDP_POLL_INTERVAL)
 
-    # 3) Timeout után: minden maradék target bezárása (safe CDP + fallback)
+    # 3) Timeout után: minden maradék target bezárása (safe CDP + fallback + Optimization #3)
     failed_cdp_closes = []
     for tid in list(tracking.keys()):
-        result = _safe_cdp_cmd("Target.closeTarget", {"targetId": tid}, label="RR closeTarget (timeout)")
+        # Optimization #3: Robust CDP cleanup with try-except
+        try:
+            result = _safe_cdp_cmd("Target.closeTarget", {"targetId": tid}, label="RR closeTarget (timeout)")
+        except Exception:
+            result = None  # Silent fail
         tracking.pop(tid, None)
         
         # Ha CDP nem működött, jegyezzük fel
@@ -2248,7 +2339,20 @@ def resolve_pairs_round_robin(pairs) -> tuple[list[tuple[str | None, str | None]
             
             if extra_handles:
                 warn(f"[RR] {len(failed_cdp_closes)} CDP closeTarget sikertelen, {len(extra_handles)} extra ablak – Selenium fallback bezárás")
-                original_handle = driver.current_window_handle if driver.current_window_handle in current_handles else None
+                
+                # Optimization #5: Window context save robustness
+                original_handle = None
+                try:
+                    original_handle = driver.current_window_handle
+                    if original_handle not in driver.window_handles:
+                        # Current handle már nem él, fallback az első elérhető handle-re
+                        original_handle = driver.window_handles[0] if driver.window_handles else None
+                except Exception:
+                    # Ha bármilyen hiba van, fallback
+                    try:
+                        original_handle = driver.window_handles[0] if driver.window_handles else None
+                    except Exception:
+                        original_handle = None
                 
                 for handle in extra_handles:
                     try:
@@ -2608,14 +2712,9 @@ def background_nav_worker():
                     if _is_driver_connection_error(task_err):
                         raise
                     
-                    # Egyéb hiba → task visszarakása queue végére (max 2x retry)
-                    retry_count = task.get("_retry_count", 0)
-                    if retry_count < 2:
-                        task["_retry_count"] = retry_count + 1
-                        OPEN_TASKS.append(task)
-                        warn(f"⚠️ Task feldolgozás hiba, újrapróbálás ({retry_count+1}/2): {task.get('id')} - {task_err}")
-                    else:
-                        warn(f"❌ Task végleg elvetve 2 sikertelen próbálkozás után: {task.get('id')}")
+                    # Egyéb hiba → task eldobása, scraper majd újra felveszi természetes módon
+                    tbody_id = task.get('id', 'N/A')
+                    warn(f"⚠️ Task feldolgozás hiba, eldobva (scraper majd újra felveszi): {tbody_id} - {task_err}")
 
             save_link_cache(link_cache)
 
@@ -2888,6 +2987,10 @@ def maybe_refresh_group_tab(url: str, info: dict) -> bool:
     if now < info.get("next_refresh", 0):
         return False
 
+    handle = info.get("handle")
+    if handle and handle not in driver.window_handles:
+        return False
+
     ok = False
     try:
         result = _safe_execute_async_script(r"""
@@ -2895,7 +2998,10 @@ def maybe_refresh_group_tab(url: str, info: dict) -> bool:
             try {
                 var sc = document.querySelector('div.table-container.product-table-container');
                 if (!sc) { callback({ok:false, err:'container-not-found'}); return; }
-                fetch(window.location.href, {cache:'no-store'})
+                fetch(window.location.href, {
+                    cache:'no-store',
+                    headers: {'Cache-Control': 'no-cache, no-store, must-revalidate'}
+                })
                   .then(r => { if (!r.ok) throw new Error('http-'+r.status); return r.text(); })
                   .then(html => {
                       var parser = new DOMParser();
@@ -2903,9 +3009,42 @@ def maybe_refresh_group_tab(url: str, info: dict) -> bool:
                       var newSc = doc.querySelector('div.table-container.product-table-container');
                       if (!newSc) { callback({ok:false, err:'new-container-not-found'}); return; }
                       var y = window.scrollY;
-                      sc.innerHTML = newSc.innerHTML;
+                      
+                      // Smart differential update: only update changed tbody elements
+                      var oldTbodies = sc.querySelectorAll('tbody');
+                      var newTbodies = newSc.querySelectorAll('tbody');
+                      var updated = 0;
+                      
+                      // Update/add changed tbody elements
+                      for (var i = 0; i < newTbodies.length; i++) {
+                          var newTbody = newTbodies[i];
+                          var newId = newTbody.getAttribute('data-id') || newTbody.getAttribute('dataid') || '';
+                          var oldTbody = oldTbodies[i];
+                          
+                          if (!oldTbody) {
+                              // New tbody - append it
+                              sc.appendChild(newTbody.cloneNode(true));
+                              updated++;
+                          } else {
+                              var oldId = oldTbody.getAttribute('data-id') || oldTbody.getAttribute('dataid') || '';
+                              // Check if changed (by ID or content)
+                              if (oldId !== newId || oldTbody.innerHTML !== newTbody.innerHTML) {
+                                  oldTbody.replaceWith(newTbody.cloneNode(true));
+                                  updated++;
+                              }
+                          }
+                      }
+                      
+                      // Remove excess old tbody elements
+                      for (var i = newTbodies.length; i < oldTbodies.length; i++) {
+                          if (oldTbodies[i] && oldTbodies[i].parentNode) {
+                              oldTbodies[i].remove();
+                              updated++;
+                          }
+                      }
+                      
                       window.scrollTo(0, y);
-                      callback({ok:true});
+                      callback({ok:true, updated:updated, total:newTbodies.length});
                   })
                   .catch(e => callback({ok:false, err:String(e)}));
             } catch(e) { callback({ok:false, err:String(e)}); }
@@ -2959,12 +3098,19 @@ def open_next_tab_if_needed(next_url):
         original = driver.current_window_handle
     except Exception:
         original = None
+    
+    # Store MAIN_HANDLE for validation after opening
+    main_to_check = MAIN_HANDLE
 
     try:
         driver.switch_to.new_window('tab')
         driver.get(next_url)
         _inject_disable_animations()
         handle = driver.current_window_handle
+        
+        # Check if MAIN_HANDLE was lost during tab opening
+        if main_to_check and main_to_check not in driver.window_handles:
+            warn(f"⚠️ MAIN_HANDLE lost during NEXT tab opening")
 
         WebDriverWait(driver, 8).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "div.table-container.product-table-container"))
@@ -3054,7 +3200,10 @@ def maybe_refresh_next_tab(url: str, info: dict) -> bool:
             try {
                 var sc = document.querySelector('div.table-container.product-table-container');
                 if (!sc) { callback({ok:false, err:'container-not-found'}); return; }
-                fetch(window.location.href, {cache:'no-store'})
+                fetch(window.location.href, {
+                    cache:'no-store',
+                    headers: {'Cache-Control': 'no-cache, no-store, must-revalidate'}
+                })
                   .then(r => { if (!r.ok) throw new Error('http-'+r.status); return r.text(); })
                   .then(html => {
                       var parser = new DOMParser();
@@ -3062,9 +3211,42 @@ def maybe_refresh_next_tab(url: str, info: dict) -> bool:
                       var newSc = doc.querySelector('div.table-container.product-table-container');
                       if (!newSc) { callback({ok:false, err:'new-container-not-found'}); return; }
                       var y = window.scrollY;
-                      sc.innerHTML = newSc.innerHTML;
+                      
+                      // Smart differential update: only update changed tbody elements
+                      var oldTbodies = sc.querySelectorAll('tbody');
+                      var newTbodies = newSc.querySelectorAll('tbody');
+                      var updated = 0;
+                      
+                      // Update/add changed tbody elements
+                      for (var i = 0; i < newTbodies.length; i++) {
+                          var newTbody = newTbodies[i];
+                          var newId = newTbody.getAttribute('data-id') || newTbody.getAttribute('dataid') || '';
+                          var oldTbody = oldTbodies[i];
+                          
+                          if (!oldTbody) {
+                              // New tbody - append it
+                              sc.appendChild(newTbody.cloneNode(true));
+                              updated++;
+                          } else {
+                              var oldId = oldTbody.getAttribute('data-id') || oldTbody.getAttribute('dataid') || '';
+                              // Check if changed (by ID or content)
+                              if (oldId !== newId || oldTbody.innerHTML !== newTbody.innerHTML) {
+                                  oldTbody.replaceWith(newTbody.cloneNode(true));
+                                  updated++;
+                              }
+                          }
+                      }
+                      
+                      // Remove excess old tbody elements
+                      for (var i = newTbodies.length; i < oldTbodies.length; i++) {
+                          if (oldTbodies[i] && oldTbodies[i].parentNode) {
+                              oldTbodies[i].remove();
+                              updated++;
+                          }
+                      }
+                      
                       window.scrollTo(0, y);
-                      callback({ok:true});
+                      callback({ok:true, updated:updated, total:newTbodies.length});
                   })
                   .catch(e => callback({ok:false, err:String(e)}));
             } catch(e) { callback({ok:false, err:String(e)}); }
@@ -3088,6 +3270,25 @@ group_open_pending = set()
 next_open_pending = set()
 
 
+def validate_and_switch_tab(handle, tabs_dict, url, tab_type):
+    """
+    Helper function to validate window handle and switch to tab.
+    Returns True if successful, False otherwise.
+    Cleans up tabs_dict on failure.
+    """
+    if handle not in driver.window_handles:
+        tabs_dict.pop(url, None)
+        log(f"⚠️ {tab_type} tab bezárva, eltávolítva: {handle[:8] if handle else 'None'}")
+        return False
+    try:
+        driver.switch_to.window(handle)
+        return True
+    except Exception as e:
+        tabs_dict.pop(url, None)
+        log(f"⚠️ {tab_type} tab hiba, eltávolítva: {handle[:8] if handle else 'None'} - {str(e)[:50]}")
+        return False
+
+
 def _open_group_tab_sync(group_url: str):
     """
     Régi open_group_tab_if_needed logika, de külön függvényben.
@@ -3106,6 +3307,10 @@ def _open_group_tab_sync(group_url: str):
         original = driver.current_window_handle
     except Exception:
         original = None
+    
+    # Extra safety: check if original handle still exists
+    if original and original not in driver.window_handles:
+        original = None
 
     try:
         driver.switch_to.new_window('tab')
@@ -3123,8 +3328,11 @@ def _open_group_tab_sync(group_url: str):
                 driver.close()
             except Exception:
                 pass
-            if original and original in driver.window_handles:
-                driver.switch_to.window(original)
+            try:
+                if original and original in driver.window_handles:
+                    driver.switch_to.window(original)
+            except Exception:
+                pass
             block_group_url(group_url, GROUP_REOPEN_BACKOFF_SEC, "empty-at-open")
             return
 
@@ -3137,8 +3345,11 @@ def _open_group_tab_sync(group_url: str):
             "next_refresh": now + _rand_group_refresh_interval(),
             "needs_scan": True,
         }
-        if original and original in driver.window_handles:
-            driver.switch_to.window(original)
+        try:
+            if original and original in driver.window_handles:
+                driver.switch_to.window(original)
+        except Exception:
+            pass
         log(f"🆕 Group tab nyitva (sync): {group_url}")
         return
     except Exception as e:
@@ -3189,6 +3400,13 @@ def _open_next_tab_sync(next_url: str):
         original = driver.current_window_handle
     except Exception:
         original = None
+    
+    # Extra safety: check if original handle still exists
+    if original and original not in driver.window_handles:
+        original = None
+    
+    # Store MAIN_HANDLE for validation after opening
+    main_to_check = MAIN_HANDLE
 
     try:
         driver.switch_to.new_window('tab')
@@ -3196,6 +3414,10 @@ def _open_next_tab_sync(next_url: str):
         _inject_disable_animations()
         handle = driver.current_window_handle
         handle_birth[handle] = time.time()
+        
+        # Check if MAIN_HANDLE was lost during tab opening
+        if main_to_check and main_to_check not in driver.window_handles:
+            warn(f"⚠️ MAIN_HANDLE lost during NEXT tab opening (sync)")
 
         WebDriverWait(driver, 8).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "div.table-container.product-table-container"))
@@ -3206,8 +3428,11 @@ def _open_next_tab_sync(next_url: str):
                 driver.close()
             except Exception:
                 pass
-            if original and original in driver.window_handles:
-                driver.switch_to.window(original)
+            try:
+                if original and original in driver.window_handles:
+                    driver.switch_to.window(original)
+            except Exception:
+                pass
             log(f"🔒 NEXT zárva üres miatt (sync): {next_url}")
             return
 
@@ -3221,8 +3446,11 @@ def _open_next_tab_sync(next_url: str):
             "needs_scan": True,
         }
 
-        if original and original in driver.window_handles:
-            driver.switch_to.window(original)
+        try:
+            if original and original in driver.window_handles:
+                driver.switch_to.window(original)
+        except Exception:
+            pass
         log(f"🆕 NEXT tab nyitva (sync): {next_url}")
         return
     except Exception as e:
@@ -3874,6 +4102,10 @@ def group_scan_tab(url: str, info: dict, higher_ids: set):
         gone_here = info.get("active_ids", set()) - curr_ids_tab
         for gid in gone_here:
             pending_deletes.append((url, gid))
+        
+        # Eltűnt ID-k eltávolítása az OPEN_TASKS sorból
+        if gone_here:
+            remove_gone_ids_from_open_tasks(gone_here)
 
         info["active_ids"] = curr_ids_tab
         info["needs_scan"] = False
@@ -3929,6 +4161,10 @@ def next_scan_tab(url: str, info: dict, curr_ids_main: set):
         gone_here = info.get("active_ids", set()) - curr_ids_tab
         for gid in gone_here:
             pending_deletes.append((url, gid))
+        
+        # Eltűnt ID-k eltávolítása az OPEN_TASKS sorból
+        if gone_here:
+            remove_gone_ids_from_open_tasks(gone_here)
 
         info["active_ids"] = curr_ids_tab
         info["needs_scan"] = False
@@ -3951,13 +4187,14 @@ _pending_update_buffer = []  # UPDATE payloadok
 _pending_delete_buffer = []  # DELETE ID-k
 
 def process_dispatcher_results(max_items=300):
-    global active_ids, seen
+    global active_ids, seen, consecutive_save_failures
     results = dispatcher.get_results(max_items=max_items)
     for res in results:
         rtype = res.get("type")
         tid = res.get("id")
 
         if rtype in ("save_ok", "save_dup_updated"):
+            consecutive_save_failures = 0  # Reset counter on successful save
             st = res.get("state_info", {})
             resp = res.get("resp", {})
             cid = resp.get("correlation_id")
@@ -3980,12 +4217,24 @@ def process_dispatcher_results(max_items=300):
             log(f"ℹ️ SAVE duplicate (külön UPDATE nem futott automatikusan): {tid} cid={cid}")
 
         elif rtype == "save_dup_update_fail":
-            warn(f"⚠️ SAVE duplicate → UPDATE FAIL id={tid} status={res.get('status')} err={res.get('error')}")
+            consecutive_save_failures += 1
+            warn(f"⚠️ SAVE duplicate → UPDATE FAIL id={tid} status={res.get('status')} err={res.get('error')} (consecutive failures: {consecutive_save_failures})")
+            
+            if consecutive_save_failures >= CONSECUTIVE_SAVE_FAIL_THRESHOLD:
+                warn(f"❌ {consecutive_save_failures} consecutive save failures → triggering account switch")
+                next_key = get_next_account_key(ACTIVE_ACCOUNT_KEY)
+                restart_with_account(next_key)
 
         elif rtype == "save_error":
+            consecutive_save_failures += 1
             err = res.get("error")
             cid = (err or {}).get("correlation_id") if isinstance(err, dict) else None
-            warn(f"⚠️ SAVE hiba id={tid} status={res.get('status')} err={err} cid={cid}")
+            warn(f"⚠️ SAVE hiba id={tid} status={res.get('status')} err={err} cid={cid} (consecutive failures: {consecutive_save_failures})")
+            
+            if consecutive_save_failures >= CONSECUTIVE_SAVE_FAIL_THRESHOLD:
+                warn(f"❌ {consecutive_save_failures} consecutive save failures → triggering account switch")
+                next_key = get_next_account_key(ACTIVE_ACCOUNT_KEY)
+                restart_with_account(next_key)
 
         elif rtype == "update_ok":
             p = res.get("payload", {})
@@ -4395,6 +4644,14 @@ def run_dynamic_bootstrap():
         try:
             if MAIN_HANDLE and MAIN_HANDLE in driver.window_handles:
                 driver.switch_to.window(MAIN_HANDLE)
+                # Verify MAIN is not about:blank (fix for bootstrap issue)
+                current_url = driver.current_url
+                if current_url == "about:blank" or not is_surebet_url(current_url):
+                    warn(f"⚠️ MAIN_HANDLE points to invalid page ({current_url}), reloading MAIN...")
+                    driver.get(MAIN_URL)
+                    _inject_disable_animations()
+                    _wait_main_container(timeout=12)
+                
                 next_link = find_next_page_link()
                 if next_link and next_link not in next_tabs:
                     next_urls_to_open.append(next_link)
@@ -4442,6 +4699,14 @@ def run_dynamic_bootstrap():
         try:
             if MAIN_HANDLE and MAIN_HANDLE in driver.window_handles:
                 driver.switch_to.window(MAIN_HANDLE)
+                # Verify MAIN is not about:blank
+                current_url = driver.current_url
+                if current_url == "about:blank" or not is_surebet_url(current_url):
+                    warn(f"⚠️ MAIN_HANDLE invalid during GROUP collection ({current_url}), reloading...")
+                    driver.get(MAIN_URL)
+                    _inject_disable_animations()
+                    _wait_main_container(timeout=12)
+                
                 tbodys = driver.find_elements(By.CSS_SELECTOR, "tbody.surebet_record")
                 for tbody in tbodys:
                     try:
@@ -4571,8 +4836,83 @@ def get_next_account_key(current: str) -> str:
     return "acc1"
 
 
+# --- Persistent cumulative runtime tracking for account rotation ---
+ACCOUNT_RUNTIME_FILE = "account_runtime.json"
+
+def load_cumulative_runtime():
+    """Load cumulative runtime from persistent file."""
+    try:
+        if os.path.exists(ACCOUNT_RUNTIME_FILE):
+            with open(ACCOUNT_RUNTIME_FILE, 'r') as f:
+                data = json.load(f)
+                return data.get("cumulative_runtime_seconds", 0.0)
+    except Exception as e:
+        warn(f"⚠️ Failed to load cumulative runtime: {e}")
+    return 0.0
+
+def save_cumulative_runtime(runtime_seconds):
+    """Save cumulative runtime to persistent file."""
+    try:
+        data = {
+            "account": ACTIVE_ACCOUNT_KEY,
+            "cumulative_runtime_seconds": runtime_seconds,
+            "last_update": time.time()
+        }
+        with open(ACCOUNT_RUNTIME_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        warn(f"⚠️ Failed to save cumulative runtime: {e}")
+
+def check_main_page_health():
+    """
+    Check if MAIN page is healthy and responsive.
+    Returns: (healthy: bool, reason: str)
+    """
+    global MAIN_HANDLE
+    
+    if not MAIN_HANDLE or MAIN_HANDLE not in driver.window_handles:
+        return False, "MAIN_HANDLE missing"
+    
+    try:
+        # Switch to MAIN
+        driver.switch_to.window(MAIN_HANDLE)
+        
+        # Check URL
+        current_url = driver.current_url
+        if current_url == "about:blank" or not is_surebet_url(current_url):
+            return False, f"Invalid URL: {current_url}"
+        
+        # Try to find table container (basic responsiveness check)
+        try:
+            containers = driver.find_elements(By.CSS_SELECTOR, "div.table-container")
+            if not containers:
+                return False, "No table container found"
+        except Exception as e:
+            return False, f"Element lookup failed: {str(e)[:50]}"
+        
+        # Check if page is frozen (execute simple JS)
+        try:
+            result = driver.execute_script("return document.readyState")
+            if result != "complete":
+                return False, f"Page not complete: {result}"
+        except Exception as e:
+            return False, f"JS execution failed: {str(e)[:50]}"
+        
+        return True, "OK"
+        
+    except Exception as e:
+        return False, f"Health check exception: {str(e)[:50]}"
+
+def reset_cumulative_runtime():
+    """Reset cumulative runtime to 0 (after account switch)."""
+    save_cumulative_runtime(0.0)
+
+
 def restart_with_account(next_key: str):
     warn(f"♻️ Account váltás: {ACTIVE_ACCOUNT_KEY} → {next_key} – Chrome + script újraindítás...")
+    
+    # Reset cumulative runtime counter after account switch
+    reset_cumulative_runtime()
 
     # Itt MOST NEM hívunk TAB-RESYNC-et.
     # A folyamatos futás alatt a DISAPPEAR_GRACE_SEC alapú törlés már szépen
@@ -4595,10 +4935,13 @@ def restart_with_account(next_key: str):
         pass
 
     # 4) Script újraindítása új accounttal
-    os.execv(
-        sys.executable,
-        [sys.executable, sys.argv[0], f"--acc={next_key}"]
-    )
+    # Build args list preserving all original args except updating --acc
+    new_args = [sys.executable]
+    for arg in sys.argv:
+        if not arg.startswith("--acc="):
+            new_args.append(arg)
+    new_args.append(f"--acc={next_key}")
+    os.execv(sys.executable, new_args)
 
 
 # ---------- fő program ----------
@@ -4609,9 +4952,16 @@ last_update_ts = {}
 last_update_attempt_ts = {}
 link_cache = load_link_cache()
 
+# Consecutive save failure tracking for account switching
+consecutive_save_failures = 0
+CONSECUTIVE_SAVE_FAIL_THRESHOLD = 55
+
 # NOTE: A futtatáskor a login() hívás indít. Ha csak importálod, ne fusson automatikusan.
 if __name__ == "__main__":
     RUN_STARTED_AT = time.time()
+    CUMULATIVE_RUNTIME_AT_START = load_cumulative_runtime()
+    if CUMULATIVE_RUNTIME_AT_START > 0:
+        log(f"📊 Cumulative runtime loaded: {CUMULATIVE_RUNTIME_AT_START/60:.1f} minutes (persistent across restarts)")
     login()
 
     log("🚀 DINAMIKUS BOOTSTRAP fázis: rekurzív MAIN + NEXT + GROUP oldalak megnyitása")
@@ -4621,17 +4971,17 @@ if __name__ == "__main__":
     except Exception:
         MAIN_HANDLE = None
 
+    # GROUP/NEXT tab-nyitó háttér worker - BOOTSTRAP ELŐTT indul!
+    groupnext_thread = threading.Thread(target=group_next_opener_worker, daemon=True)
+    groupnext_thread.start()
+    log("🚀 Group/NEXT opener worker elindítva (BOOTSTRAP előtt)")
+
     # Dinamikus BOOTSTRAP futtatása
     run_dynamic_bootstrap()
 
     # NAV worker: csak BOOTSTRAP UTÁN indul
     nav_thread = None
     nav_started = False
-
-    # GROUP/NEXT tab-nyitó háttér worker
-    groupnext_thread = threading.Thread(target=group_next_opener_worker, daemon=True)
-    groupnext_thread.start()
-    log("🚀 Group/NEXT opener worker elindítva")
 
     # Időszakos TAB cleanup worker
     tab_cleanup_thread = threading.Thread(target=tab_cleanup_worker, daemon=True)
@@ -4651,12 +5001,7 @@ if __name__ == "__main__":
         items = list(next_tabs.items())
         for url, info in items:
             handle = info["handle"]
-            try:
-                if handle not in driver.window_handles:
-                    next_tabs.pop(url, None)
-                    continue
-                driver.switch_to.window(handle)
-            except Exception:
+            if not validate_and_switch_tab(handle, next_tabs, url, "NEXT"):
                 to_close.append(url)
                 continue
 
@@ -4675,12 +5020,6 @@ if __name__ == "__main__":
                 if should_close:
                     to_close.append(url)
 
-            try:
-                if driver.window_handles:
-                    driver.switch_to.window(MAIN_HANDLE or driver.window_handles[0])
-            except Exception:
-                pass
-
         return next_all_curr_ids, pending_deletes, to_close, open_requests
 
     def scan_group_tabs_evented(curr_ids_main: set, higher_ids: set):
@@ -4691,12 +5030,7 @@ if __name__ == "__main__":
         items = list(group_tabs.items())
         for url, info in items:
             handle = info["handle"]
-            try:
-                if handle not in driver.window_handles:
-                    group_tabs.pop(url, None)
-                    continue
-                driver.switch_to.window(handle)
-            except Exception:
+            if not validate_and_switch_tab(handle, group_tabs, url, "GROUP"):
                 to_close.append(url)
                 continue
 
@@ -4712,12 +5046,6 @@ if __name__ == "__main__":
                 pending_deletes.extend(pend_del)
                 if should_close:
                     to_close.append(url)
-
-            try:
-                if driver.window_handles:
-                    driver.switch_to.window(MAIN_HANDLE or driver.window_handles[0])
-            except Exception:
-                pass
 
         return group_all_curr_ids, pending_deletes, to_close
 
@@ -4771,22 +5099,56 @@ if __name__ == "__main__":
             # --- MAIN tab életben tartása + újranyitása, ha kell ---
             try:
                 # Ha nincs MAIN_HANDLE, vagy a handle már nincs a window_handles-ben → újranyitjuk
+                # CSAK bootstrap után! Különben duplikált MAIN page-eket nyithatunk.
                 if not MAIN_HANDLE or MAIN_HANDLE not in driver.window_handles:
-                    log("⚠️ MAIN_HANDLE eltűnt, új főoldalt nyitok...")
+                    if BOOTSTRAP_COMPLETED:
+                        log("⚠️ MAIN_HANDLE eltűnt, új főoldalt nyitok...")
 
-                    # új tab + MAIN_URL betöltése
-                    driver.switch_to.new_window("tab")
-                    driver.get(MAIN_URL)
-                    MAIN_HANDLE = driver.current_window_handle
-                    handle_birth[MAIN_HANDLE] = time.time()
+                        # új tab + MAIN_URL betöltése
+                        driver.switch_to.new_window("tab")
+                        driver.get(MAIN_URL)
+                        MAIN_HANDLE = driver.current_window_handle
+                        handle_birth[MAIN_HANDLE] = time.time()
 
-                    _inject_disable_animations()
-                    _wait_main_container(timeout=12)
-                    ensure_main_autoupdate()
-                    time.sleep(3)
+                        _inject_disable_animations()
+                        _wait_main_container(timeout=12)
+                        ensure_main_autoupdate()
+                        time.sleep(3)
+                    else:
+                        log("⚠️ MAIN_HANDLE missing but bootstrap not complete yet, skipping recovery...")
+                elif BOOTSTRAP_COMPLETED and MAIN_HANDLE in driver.window_handles:
+                    # Validate MAIN is not about:blank (only after bootstrap)
+                    driver.switch_to.window(MAIN_HANDLE)
+                    current_url = driver.current_url
+                    if current_url == "about:blank" or not is_surebet_url(current_url):
+                        log(f"⚠️ MAIN_HANDLE is invalid ({current_url}), reloading MAIN page...")
+                        driver.get(MAIN_URL)
+                        _inject_disable_animations()
+                        _wait_main_container(timeout=12)
+                        ensure_main_autoupdate()
 
-                # biztosan MAIN-en vagyunk
-                driver.switch_to.window(MAIN_HANDLE)
+                # biztosan MAIN-en vagyunk (only if MAIN_HANDLE is valid)
+                if MAIN_HANDLE and MAIN_HANDLE in driver.window_handles:
+                    driver.switch_to.window(MAIN_HANDLE)
+                
+                # --- MAIN page health monitoring (only after bootstrap) ---
+                if BOOTSTRAP_COMPLETED and now_ts - MAIN_LAST_HEALTH_CHECK >= MAIN_HEALTH_CHECK_INTERVAL:
+                    MAIN_LAST_HEALTH_CHECK = now_ts
+                    
+                    healthy, reason = check_main_page_health()
+                    if not healthy:
+                        MAIN_CONSECUTIVE_FAILURES += 1
+                        warn(f"⚠️ MAIN page health check failed ({MAIN_CONSECUTIVE_FAILURES}/{MAIN_MAX_FAILURES_BEFORE_RESTART}): {reason}")
+                        
+                        if MAIN_CONSECUTIVE_FAILURES >= MAIN_MAX_FAILURES_BEFORE_RESTART:
+                            warn(f"❌ MAIN page unhealthy after {MAIN_CONSECUTIVE_FAILURES} checks, triggering restart...")
+                            DIAG_LOGGER.log_crash_context(Exception(f"MAIN unhealthy: {reason}"), "MAIN_UNHEALTHY")
+                            restart_application()
+                    else:
+                        # Reset counter on success
+                        if MAIN_CONSECUTIVE_FAILURES > 0:
+                            log(f"✅ MAIN page health recovered after {MAIN_CONSECUTIVE_FAILURES} failures")
+                        MAIN_CONSECUTIVE_FAILURES = 0
 
                 # időnként pici keepalive mozgás, hogy ne haljon el a tab
                 if now_ts - last_keepalive_ping_ts >= 90:
@@ -4806,32 +5168,93 @@ if __name__ == "__main__":
             curr_ids_main = set()
             new_ids_main = []
 
-            for tbody in tbodys_main:
-                try:
-                    tbody_id = tbody.get_attribute("data-id") or tbody.get_attribute("dataid")
-                except Exception:
-                    tbody_id = None
-                if not tbody_id:
-                    continue
+            # Optimization #3: Batch collect all tbody IDs using execute_script for faster DOM access
+            try:
+                tbody_data = driver.execute_script("""
+                    const tbodys = document.querySelectorAll('tbody.surebet_record');
+                    return Array.from(tbodys).map(tb => ({
+                        id: tb.getAttribute('data-id') || tb.getAttribute('dataid'),
+                        element: tb
+                    })).filter(item => item.id);
+                """)
+            except Exception:
+                tbody_data = []
 
-                curr_ids_main.add(tbody_id)
-                last_seen_ts[tbody_id] = now_ts
-                id_source[tbody_id] = 'main'
+            # If batch failed, fallback to old method
+            if not tbody_data:
+                for tbody in tbodys_main:
+                    try:
+                        tbody_id = tbody.get_attribute("data-id") or tbody.get_attribute("dataid")
+                    except Exception:
+                        tbody_id = None
+                    if not tbody_id:
+                        continue
 
-                # GROUP linkek folyamatos keresése + tabnyitás (BOOTSTRAP alatt is)
-                try:
-                    group_url = find_group_link_in_tbody(tbody)
-                    if group_url:
-                        open_group_tab_if_needed(group_url)
-                except Exception:
-                    pass
+                    # Check for "surebet.com" text in tbody (case-insensitive) → trigger account switch
+                    try:
+                        tbody_text = tbody.text.lower()
+                        if "surebet.com" in tbody_text:
+                            warn(f"⚠️ 'surebet.com' text detected in tbody {tbody_id} → triggering account switch")
+                            next_key = get_next_account_key(ACTIVE_ACCOUNT_KEY)
+                            restart_with_account(next_key)
+                    except Exception as e:
+                        pass  # Ignore text extraction errors
 
-                # BOOTSTRAP alatt is megkülönböztetjük, mi seen, mi új,
-                # de a SAVE/UPDATE úgyis no-op lesz a gating miatt.
-                if tbody_id in seen:
-                    handle_update_for_id(tbody_id)
-                else:
-                    new_ids_main.append(tbody_id)
+                    curr_ids_main.add(tbody_id)
+                    last_seen_ts[tbody_id] = now_ts
+                    id_source[tbody_id] = 'main'
+
+                    # GROUP linkek folyamatos keresése + tabnyitás (BOOTSTRAP alatt is)
+                    try:
+                        group_url = find_group_link_in_tbody(tbody)
+                        if group_url:
+                            open_group_tab_if_needed(group_url)
+                    except Exception:
+                        pass
+
+                    # BOOTSTRAP alatt is megkülönböztetjük, mi seen, mi új,
+                    # de a SAVE/UPDATE úgyis no-op lesz a gating miatt.
+                    if tbody_id in seen:
+                        handle_update_for_id(tbody_id)
+                    else:
+                        new_ids_main.append(tbody_id)
+            else:
+                # Fast path: process batched data
+                for item in tbody_data:
+                    tbody_id = item.get('id')
+                    if not tbody_id:
+                        continue
+                    
+                    # Check for "surebet.com" text in tbody (case-insensitive) → trigger account switch
+                    tbody_elem = item.get('element')
+                    if tbody_elem:
+                        try:
+                            tbody_text = tbody_elem.text.lower()
+                            if "surebet.com" in tbody_text:
+                                warn(f"⚠️ 'surebet.com' text detected in tbody {tbody_id} → triggering account switch")
+                                next_key = get_next_account_key(ACTIVE_ACCOUNT_KEY)
+                                restart_with_account(next_key)
+                        except Exception:
+                            pass  # Ignore text extraction errors
+                    
+                    curr_ids_main.add(tbody_id)
+                    last_seen_ts[tbody_id] = now_ts
+                    id_source[tbody_id] = 'main'
+
+                    # GROUP linkek - still need element reference
+                    if tbody_elem:
+                        try:
+                            group_url = find_group_link_in_tbody(tbody_elem)
+                            if group_url:
+                                open_group_tab_if_needed(group_url)
+                        except Exception:
+                            pass
+
+                    # BOOTSTRAP alatt is megkülönböztetjük, mi seen, mi új
+                    if tbody_id in seen:
+                        handle_update_for_id(tbody_id)
+                    else:
+                        new_ids_main.append(tbody_id)
 
             # Új ID-k NAV-queue-be (BOOTSTRAP alatt csak "előkészül", de nem küldünk)
             batch_save_new_ids(new_ids_main)
@@ -4879,10 +5302,16 @@ if __name__ == "__main__":
             # MAIN-en eltűnt ID-k
             maybe_gone_main = [aid for aid in list(active_ids) if id_source.get(aid) == 'main' and aid not in curr_ids_main]
             now_ts2 = time.time()
+            gone_main_ids = set()
             for gid in maybe_gone_main:
                 last_ts = last_seen_ts.get(gid, 0.0)
                 if (now_ts2 - last_ts) >= DISAPPEAR_GRACE_SEC:
                     schedule_delete(gid)
+                    gone_main_ids.add(gid)
+            
+            # Eltűnt ID-k eltávolítása az OPEN_TASKS sorból
+            if gone_main_ids:
+                remove_gone_ids_from_open_tasks(gone_main_ids)
 
             # TABOK BEZÁRÁSA
             for url in next_to_close:
@@ -4917,11 +5346,19 @@ if __name__ == "__main__":
 
             # ✅ ACCOUNT ROTÁCIÓ: ha letelt X perc, váltunk acc1 <-> acc2
             if ACCOUNT_ROTATE_MIN > 0:
-                elapsed_min = (time.time() - RUN_STARTED_AT) / 60.0
+                # Calculate total runtime = previous sessions + current session
+                current_session_runtime = time.time() - RUN_STARTED_AT
+                total_runtime_seconds = CUMULATIVE_RUNTIME_AT_START + current_session_runtime
+                elapsed_min = total_runtime_seconds / 60.0
+                
                 if elapsed_min >= ACCOUNT_ROTATE_MIN:
                     next_key = get_next_account_key(ACTIVE_ACCOUNT_KEY)
-                    log(f"♻️ {ACCOUNT_ROTATE_MIN:.1f} perc letelt, váltás {ACTIVE_ACCOUNT_KEY} → {next_key}")
+                    log(f"♻️ {elapsed_min:.1f} perc eltelt (cumulative), váltás {ACTIVE_ACCOUNT_KEY} → {next_key}")
                     restart_with_account(next_key)
+                
+                # Periodically save cumulative runtime (every ~100 iterations)
+                if DIAG_LOGGER.loop_iteration % 100 == 0:
+                    save_cumulative_runtime(total_runtime_seconds)
 
             # 🔴 NAV worker indítása – CSAK BOOTSTRAP UTÁN
             if not nav_started and not bootstrap:
@@ -4940,7 +5377,9 @@ if __name__ == "__main__":
             if DIAG_LOGGER.loop_iteration % 20 == 0:  # Minden 20. iterációnál
                 try:
                     open_tasks_len = len(OPEN_TASKS) if OPEN_TASKS else 0
+                    active_ids_count = len(active_ids) if active_ids else 0
                     DIAG_LOGGER.log_queue_status(open_tasks=open_tasks_len)
+                    log(f"📊 Active IDs: {active_ids_count}")
                 except Exception:
                     pass
             
@@ -4958,6 +5397,11 @@ if __name__ == "__main__":
         else:
             warn(f"⚠️ WebDriverException in main loop (not restarting): {e}")
             DIAG_LOGGER.log_event("ERROR", f"WebDriverException (not critical): {str(e)[:150]}", "WARN")
+    except Exception as e:
+        # Catch-all for any unhandled exceptions
+        warn(f"❌ UNHANDLED CRASH: {type(e).__name__}: {e}")
+        DIAG_LOGGER.log_crash_context(e, "UNHANDLED_EXCEPTION")
+        restart_application()
     finally:
         try:
             flush_pending_updates()
